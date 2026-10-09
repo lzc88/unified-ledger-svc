@@ -1,0 +1,10 @@
+[project]
+name = "investment-tracker"
+version = "0.1.0"
+description = "Personal investments tracker tool"
+readme = "README.md"
+authors = [
+    { name = "Lim Zhi Chao", email = "132840121+lzc88@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
