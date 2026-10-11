@@ -86,6 +86,7 @@ class CanonicalAsset(Timestamped, Base):
     trading_venue_figi: Mapped[str] = mapped_column(String(100), primary_key=True)
     composite_figi: Mapped[str | None] = mapped_column(String(100))
     share_class_figi: Mapped[str | None] = mapped_column(String(100))
+    ticker: Mapped[str] = mapped_column(String(32))
     listing_category: Mapped[ListingCategory] = mapped_column(
         _enum(ListingCategory, "listing_category")
     )
