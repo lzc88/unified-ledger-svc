@@ -51,6 +51,13 @@ class IbkrSettings(BaseSettings):
     ibkr_flex_query_id: str
 
 
+class OpenFigiSettings(BaseSettings):
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    openfigi_api_key: SecretStr | None = None
+
+
 def _existing_env_file() -> Path:
     env_file = _env_file()
     if not env_file.is_file():
@@ -66,5 +73,12 @@ def get_settings() -> Settings:
 @lru_cache
 def get_ibkr_settings() -> IbkrSettings:
     return IbkrSettings(
+        _env_file=_existing_env_file()  # pyright: ignore[reportCallIssue]
+    )
+
+
+@lru_cache
+def get_openfigi_settings() -> OpenFigiSettings:
+    return OpenFigiSettings(
         _env_file=_existing_env_file()  # pyright: ignore[reportCallIssue]
     )
