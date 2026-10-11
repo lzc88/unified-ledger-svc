@@ -148,10 +148,14 @@ def _trading_venue_listing(
             log.warning("OpenFIGI matched %s to several listings", key)
         return None
     figi, item = listings.popitem()
+    if not item.get("ticker"):
+        log.warning("OpenFIGI returned no ticker for %s", key)
+        return None
     return {
         "trading_venue_figi": figi,
         "composite_figi": _figi_or_none(item.get("compositeFIGI")),
         "share_class_figi": _figi_or_none(item.get("shareClassFIGI")),
+        "ticker": item["ticker"],
         "listing_exchange": item["exchCode"],
     }
 
