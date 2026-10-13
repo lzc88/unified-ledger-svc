@@ -1,3 +1,5 @@
+name: unified-ledger-svc
+
 services:
   db:
     image: supabase/postgres:17.11.0.004
