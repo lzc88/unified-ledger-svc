@@ -179,11 +179,13 @@ def fail_interrupted_jobs(session: Session) -> int:
     return result.rowcount
 
 
-def latest_jobs(session: Session, user_id: str, limit: int) -> list[SyncJob]:
+def latest_jobs(
+    session: Session, broker_id: str, user_id: str, limit: int
+) -> list[SyncJob]:
     return list(
         session.scalars(
             select(SyncJob)
-            .where(SyncJob.from_user_id == user_id)
+            .where(SyncJob.from_broker_id == broker_id, SyncJob.from_user_id == user_id)
             .order_by(SyncJob.created_at.desc())
             .limit(limit)
         )
