@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from api.deps import Figi, SessionFactory
 from api.schemas.sync import BackfillRequest, Job, RefreshRequest
+from config.config import API_JOBS_DEFAULT_LIMIT, API_JOBS_MAX_LIMIT
 from database.models import SyncJob, SyncKind
 from integrations.base import BrokerAdapter
 from integrations.openfigi import OpenFigiClient
@@ -67,7 +68,9 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
         session_factory: SessionFactory,
         broker: Broker,
         user_id: str,
-        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        limit: Annotated[
+            int, Query(ge=1, le=API_JOBS_MAX_LIMIT)
+        ] = API_JOBS_DEFAULT_LIMIT,
     ) -> list[Job]:
         with session_factory() as session:
             jobs = latest_jobs(session, broker.broker_id, user_id, limit)

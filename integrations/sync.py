@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from config.config import SYNC_REFRESH_OVERLAP_DAYS
 from database.models import (
     ACTIVE_SYNC_STATUSES,
     Account,
@@ -29,8 +30,6 @@ from .load import known_broker_assets, load
 from .openfigi import OpenFigiClient, assign_figis
 
 log = logging.getLogger(__name__)
-
-REFRESH_OVERLAP_DAYS = 7
 
 
 class ActiveJobError(Exception):
@@ -85,7 +84,7 @@ def refresh_range(
         )
     end = today - timedelta(days=1)
     latest_date = max(latest).astimezone(broker.timezone).date()
-    return min(latest_date - timedelta(days=REFRESH_OVERLAP_DAYS), end), end
+    return min(latest_date - timedelta(days=SYNC_REFRESH_OVERLAP_DAYS), end), end
 
 
 def create_job(

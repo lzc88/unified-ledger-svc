@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from api.deps import Market, SessionFactory
 from api.schemas.portfolio import Currency
+from config.config import PORTFOLIO_DEFAULT_CURRENCY
 from database.models import User
 from portfolio.events import ledger_events
 from portfolio.ledger import LedgerError
@@ -17,7 +18,7 @@ def get_portfolio(
     user_id: str,
     session_factory: SessionFactory,
     market: Market,
-    currency: Currency = "SGD",
+    currency: Currency = PORTFOLIO_DEFAULT_CURRENCY,
 ) -> PortfolioSummary:
     with session_factory() as session:
         if session.get(User, user_id) is None:
