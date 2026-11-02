@@ -14,5 +14,6 @@ wheels/
 
 *.sql
 *.xlsx
+CLAUDE.md
 
 tests/
