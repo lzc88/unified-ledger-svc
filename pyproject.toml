@@ -1,7 +1,7 @@
 [project]
-name = "investment-tracker"
+name = "unified-ledger-svc"
 version = "0.1.0"
-description = "Personal investments tracker tool"
+description = "Unified ledger service for personal finance tracking"
 readme = "README.md"
 authors = [
     { name = "Lim Zhi Chao", email = "132840121+lzc88@users.noreply.github.com" }
