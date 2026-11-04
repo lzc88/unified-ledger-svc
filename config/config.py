@@ -111,6 +111,7 @@ CONFIG_DIR = Path(__file__).parent
 ENV_FILES = {
     "local": CONFIG_DIR / ".env.local",
     "remote": CONFIG_DIR / ".env",
+    "test": CONFIG_DIR / ".env.test",
 }
 
 
