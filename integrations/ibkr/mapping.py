@@ -3,40 +3,18 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 
+from config.config import (
+    IBKR_FLEX_DATE_FORMATS,
+    IBKR_FLEX_TIME_FORMATS,
+    IBKR_FLEX_TIMEZONE,
+    IBKR_LISTING_EXCHANGE_TO_EXCH_CODES,
+    IBKR_SUB_CATEGORY_TO_LISTING_CATEGORY,
+)
 from database.models import CashAction, FeeType, ListingCategory, OrderAction
 from integrations.base import AssetIdentity, FormatError, MappingResult, Row, SkippedRow
 
-FLEX_TIMEZONE = ZoneInfo("America/New_York")
-SUB_CATEGORY_TO_LISTING_CATEGORY = {
-    "ETF": ListingCategory.ETF,
-    "COMMON": ListingCategory.STOCK,
-}
-LISTING_EXCHANGE_TO_EXCH_CODES = {
-    "NASDAQ": frozenset({"UW", "UQ", "UR"}),
-    "NYSE": frozenset({"UN"}),
-    "ARCA": frozenset({"UP"}),
-    "AMEX": frozenset({"UA"}),
-    "BATS": frozenset({"UF"}),
-    "LSE": frozenset({"LN"}),
-    "LSEETF": frozenset({"LN"}),
-    "IBIS": frozenset({"GY"}),
-    "IBIS2": frozenset({"GY"}),
-    "FWB": frozenset({"GF"}),
-    "AEB": frozenset({"NA"}),
-    "SBF": frozenset({"FP"}),
-    "EBS": frozenset({"SE"}),
-    "BVME": frozenset({"IM"}),
-    "SEHK": frozenset({"HK"}),
-    "SGX": frozenset({"SP"}),
-    "ASX": frozenset({"AT"}),
-    "TSE": frozenset({"CT"}),
-    "TSEJ": frozenset({"JT"}),
-}
 FX_PAIR_PATTERN = re.compile(r"^([A-Z]{3})\.([A-Z]{3})$")
-DATE_FORMATS = ("%Y%m%d", "%Y-%m-%d")
-TIME_FORMATS = ("%H%M%S", "%H:%M:%S")
 
 
 class FlexFormatError(FormatError):
@@ -51,26 +29,35 @@ Mapper = Callable[[MappingResult, dict[str, str], str], None]
 
 
 def map_statements(documents: Iterable[bytes]) -> MappingResult:
+
     result = MappingResult()
     skipped_ids: set[str] = set()
+
     for document in documents:
+
         try:
             root = ET.fromstring(document)
         except ET.ParseError as exc:
             raise FlexFormatError(f"Flex statement is not valid XML: {exc}") from None
+
         if root.tag != "FlexQueryResponse":
             raise FlexFormatError(f"Expected FlexQueryResponse, got <{root.tag}>")
+
         for statement in root.iter("FlexStatement"):
+
             account_id = _require(statement.attrib, "accountId", "FlexStatement")
             result.accounts.setdefault(account_id, {"account_id": account_id})
             info = statement.find("AccountInformation")
+
             if info is not None and info.get("name", "").strip():
                 result.account_names[account_id] = info.get("name", "").strip()
+
             for element in statement.findall("Trades/Trade"):
                 if element.get("levelOfDetail", "EXECUTION") == "EXECUTION":
                     _apply(
                         result, skipped_ids, "Trades", element, account_id, _map_trade
                     )
+
             for element in statement.findall("CashTransactions/CashTransaction"):
                 if element.get("levelOfDetail", "DETAIL") == "DETAIL":
                     _apply(
@@ -81,6 +68,7 @@ def map_statements(documents: Iterable[bytes]) -> MappingResult:
                         account_id,
                         _map_cash_transaction,
                     )
+
     return result
 
 
@@ -92,7 +80,9 @@ def _apply(
     account_id: str,
     mapper: Mapper,
 ) -> None:
+
     attrs = dict(element.attrib)
+
     try:
         mapper(result, attrs, account_id)
     except _Skip as skip:
@@ -105,15 +95,21 @@ def _apply(
 
 
 def _map_trade(result: MappingResult, attrs: dict[str, str], account_id: str) -> None:
+
     section = "Trades"
     trade_id = _require(attrs, "tradeID", section)
+
     if trade_id in result.trades or trade_id in result.fx:
         return
+
     category = _require(attrs, "assetCategory", section)
+
     if category == "CASH":
         _map_fx(result, attrs, account_id, trade_id)
+
     elif category == "STK":
         _map_stock(result, attrs, account_id, trade_id)
+
     else:
         raise _Skip(f"asset category {category!r} is not tracked")
 
@@ -121,6 +117,7 @@ def _map_trade(result: MappingResult, attrs: dict[str, str], account_id: str) ->
 def _map_stock(
     result: MappingResult, attrs: dict[str, str], account_id: str, trade_id: str
 ) -> None:
+
     section = "Trades"
     category = _listing_category(attrs)
     quantity, action, order_id = _execution(attrs)
@@ -132,12 +129,13 @@ def _map_stock(
     result.assets.setdefault(
         conid, {"listing_category": category, "listing_currency": currency}
     )
+
     result.identities.setdefault(
         conid,
         AssetIdentity(
             symbol=_require(attrs, "symbol", section),
             currency=currency,
-            exch_codes=LISTING_EXCHANGE_TO_EXCH_CODES.get(
+            exch_codes=IBKR_LISTING_EXCHANGE_TO_EXCH_CODES.get(
                 listing_exchange or "", frozenset()
             ),
             isin=attrs.get("isin", "").strip() or None,
@@ -220,10 +218,10 @@ def _map_fx(
 
 def _listing_category(attrs: dict[str, str]) -> ListingCategory:
     sub_category = _require(attrs, "subCategory", "Trades")
-    category = SUB_CATEGORY_TO_LISTING_CATEGORY.get(sub_category)
+    category = IBKR_SUB_CATEGORY_TO_LISTING_CATEGORY.get(sub_category)
     if category is None:
         raise _Skip(f"sub category {sub_category!r} is not tracked")
-    return category
+    return ListingCategory(category)
 
 
 def _execution(attrs: dict[str, str]) -> tuple[Decimal, OrderAction, str]:
@@ -310,14 +308,14 @@ def _datetime(attrs: dict[str, str], name: str, section: str) -> datetime:
     for separator in (",", " ", "T"):
         normalized = normalized.replace(separator, ";")
     day_part, _, time_part = normalized.partition(";")
-    day = _parse(day_part, DATE_FORMATS)
-    clock = _parse(time_part, TIME_FORMATS) if time_part else datetime.min
+    day = _parse(day_part, IBKR_FLEX_DATE_FORMATS)
+    clock = _parse(time_part, IBKR_FLEX_TIME_FORMATS) if time_part else datetime.min
     if day is None or clock is None:
         raise FlexFormatError(
             f"{section} {name}={raw!r}: set the Flex Query date format to yyyyMMdd "
             "and time format to HHmmss or HH:mm:ss"
         )
-    return datetime.combine(day.date(), clock.time(), tzinfo=FLEX_TIMEZONE)
+    return datetime.combine(day.date(), clock.time(), tzinfo=IBKR_FLEX_TIMEZONE)
 
 
 def _parse(value: str, formats: tuple[str, ...]) -> datetime | None:

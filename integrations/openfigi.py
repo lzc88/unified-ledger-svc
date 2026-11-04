@@ -5,20 +5,23 @@ import time
 from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
-import httpx
+import httpx2
 
-from config.config import get_openfigi_settings
+from config.config import (
+    OPENFIGI_HTTP_TIMEOUT_SECONDS,
+    OPENFIGI_KEYED_BATCH_SIZE,
+    OPENFIGI_KEYED_REQUEST_INTERVAL,
+    OPENFIGI_KEYLESS_BATCH_SIZE,
+    OPENFIGI_KEYLESS_REQUEST_INTERVAL,
+    OPENFIGI_MAPPING_URL,
+    OPENFIGI_MAX_ATTEMPTS,
+    OPENFIGI_RATE_LIMIT_BACKOFF,
+    get_openfigi_settings,
+)
 from integrations.base import AssetIdentity, IntegrationError, MappingResult, Row
 
 log = logging.getLogger(__name__)
 
-MAPPING_URL = "https://api.openfigi.com/v3/mapping"
-KEYLESS_BATCH_SIZE = 5
-KEYED_BATCH_SIZE = 100
-KEYLESS_REQUEST_INTERVAL = 60.0 / 25
-KEYED_REQUEST_INTERVAL = 6.0 / 25
-RATE_LIMIT_BACKOFF = 60.0
-MAX_ATTEMPTS = 3
 FIGI_PATTERN = re.compile(r"^BBG[0-9A-Z]{9}$")
 
 
@@ -31,13 +34,19 @@ class OpenFigiClient:
         self,
         api_key: str | None = None,
         *,
-        http: httpx.Client | None = None,
+        http: httpx2.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._headers = {"X-OPENFIGI-APIKEY": api_key} if api_key else {}
-        self._batch_size = KEYED_BATCH_SIZE if api_key else KEYLESS_BATCH_SIZE
-        self._interval = KEYED_REQUEST_INTERVAL if api_key else KEYLESS_REQUEST_INTERVAL
-        self._http = http or httpx.Client(timeout=30.0)
+        self._batch_size = (
+            OPENFIGI_KEYED_BATCH_SIZE if api_key else OPENFIGI_KEYLESS_BATCH_SIZE
+        )
+        self._interval = (
+            OPENFIGI_KEYED_REQUEST_INTERVAL
+            if api_key
+            else OPENFIGI_KEYLESS_REQUEST_INTERVAL
+        )
+        self._http = http or httpx2.Client(timeout=OPENFIGI_HTTP_TIMEOUT_SECONDS)
         self._sleep = sleep
         self._lock = threading.Lock()
         self._last_request: float | None = None
@@ -56,18 +65,18 @@ class OpenFigiClient:
 
     def _post(self, jobs: list[dict[str, str]]) -> list[dict[str, Any]]:
         with self._lock:
-            for attempt in range(1, MAX_ATTEMPTS + 1):
+            for attempt in range(1, OPENFIGI_MAX_ATTEMPTS + 1):
                 self._throttle()
                 try:
                     response = self._http.post(
-                        MAPPING_URL, json=jobs, headers=self._headers
+                        OPENFIGI_MAPPING_URL, json=jobs, headers=self._headers
                     )
-                except httpx.HTTPError as exc:
+                except httpx2.HTTPError as exc:
                     raise OpenFigiError(
                         f"{type(exc).__name__} calling OpenFIGI"
                     ) from None
-                if response.status_code == 429 and attempt < MAX_ATTEMPTS:
-                    self._sleep(RATE_LIMIT_BACKOFF)
+                if response.status_code == 429 and attempt < OPENFIGI_MAX_ATTEMPTS:
+                    self._sleep(OPENFIGI_RATE_LIMIT_BACKOFF)
                     continue
                 if response.status_code != 200:
                     raise OpenFigiError(f"HTTP {response.status_code} from OpenFIGI")

@@ -1,7 +1,7 @@
 [project]
-name = "investment-tracker"
+name = "unified-ledger-svc"
 version = "0.1.0"
-description = "Personal investments tracker tool"
+description = "Unified ledger service for personal finance tracking"
 readme = "README.md"
 authors = [
     { name = "Lim Zhi Chao", email = "132840121+lzc88@users.noreply.github.com" }
@@ -10,10 +10,19 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.20.0",
     "fastapi>=0.143.0",
-    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2",
     "uvicorn[standard]>=0.54.0",
     "yfinance>=1.7.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -10,32 +10,9 @@ from typing import Protocol
 
 import yfinance as yf
 
-log = logging.getLogger(__name__)
+from config.config import MARKET_CACHE_TTL_SECONDS, MARKET_EXCH_CODE_SUFFIXES
 
-US_SUFFIX = ""
-EXCH_CODE_SUFFIXES = {
-    "US": US_SUFFIX,
-    "UW": US_SUFFIX,
-    "UQ": US_SUFFIX,
-    "UR": US_SUFFIX,
-    "UN": US_SUFFIX,
-    "UP": US_SUFFIX,
-    "UA": US_SUFFIX,
-    "UF": US_SUFFIX,
-    "LN": ".L",
-    "GY": ".DE",
-    "GF": ".F",
-    "NA": ".AS",
-    "FP": ".PA",
-    "SE": ".SW",
-    "IM": ".MI",
-    "HK": ".HK",
-    "SP": ".SI",
-    "AT": ".AX",
-    "CT": ".TO",
-    "JT": ".T",
-}
-CACHE_TTL_SECONDS = 300
+log = logging.getLogger(__name__)
 
 
 class MarketDataError(Exception):
@@ -49,7 +26,7 @@ class Quote:
 
 
 def yahoo_symbol(ticker: str, exch_code: str) -> str | None:
-    suffix = EXCH_CODE_SUFFIXES.get(exch_code)
+    suffix = MARKET_EXCH_CODE_SUFFIXES.get(exch_code)
     if suffix is None:
         return None
     symbol = ticker.strip().replace("/", "-").replace(" ", "-")
@@ -71,8 +48,7 @@ class MarketData(Protocol):
 
 
 class YahooMarketData:
-    def __init__(self, ttl: float = CACHE_TTL_SECONDS) -> None:
-        self._ttl = ttl
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cache: dict[tuple, tuple[float, object]] = {}
 
@@ -96,7 +72,7 @@ class YahooMarketData:
     def _cached(self, key: tuple, load: Callable):
         with self._lock:
             hit = self._cache.get(key)
-            if hit and time.monotonic() - hit[0] < self._ttl:
+            if hit and time.monotonic() - hit[0] < MARKET_CACHE_TTL_SECONDS:
                 return hit[1]
         value = load()
         with self._lock:

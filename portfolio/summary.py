@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
+from config.config import PORTFOLIO_DUST
+
 from .ledger import ZERO, Event, Holding, Snapshot, replay
 from .market import (
     MarketData,
@@ -73,7 +75,6 @@ class PortfolioSummary(BaseModel):
 
 
 Rate = Decimal | None
-DUST = Decimal("0.000001")
 
 
 def build_summary(
@@ -298,7 +299,7 @@ def _balances(amounts: dict[str, Decimal], fx: dict[str, Rate]) -> list[Balance]
     return [
         Balance(currency=c, amount=float(a), value=_float(_mul(a, fx.get(c))))
         for c, a in sorted(amounts.items())
-        if abs(a) >= DUST
+        if abs(a) >= PORTFOLIO_DUST
     ]
 
 
