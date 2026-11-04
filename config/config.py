@@ -17,7 +17,7 @@ IBKR_FLEX_SEND_REQUEST_URL = (
     "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
 )
 IBKR_FLEX_API_VERSION = "3"
-IBKR_FLEX_USER_AGENT = "investment-tracker/0.1 (python-httpx)"
+IBKR_FLEX_USER_AGENT = "investment-tracker/0.1 (python-httpx2)"
 IBKR_FLEX_HTTP_TIMEOUT_SECONDS = 60.0
 IBKR_FLEX_MAX_WINDOW_DAYS = 365
 IBKR_FLEX_RETRYABLE_CODES = frozenset(

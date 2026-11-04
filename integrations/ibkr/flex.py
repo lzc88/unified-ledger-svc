@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import date, timedelta
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 
 from config.config import (
     IBKR_FLEX_API_VERSION,
@@ -56,13 +56,13 @@ class FlexClient:
         token: str,
         query_id: str,
         *,
-        http: httpx.Client | None = None,
+        http: httpx2.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
 
         self._token = token
         self._query_id = query_id
-        self._http = http or httpx.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS)
+        self._http = http or httpx2.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS)
         self._sleep = sleep
         self._last_request: float | None = None
 
@@ -153,7 +153,7 @@ class FlexClient:
             response = self._http.get(
                 url, params=params, headers={"User-Agent": IBKR_FLEX_USER_AGENT}
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise FlexError(
                 None, f"{type(exc).__name__} calling {urlsplit(url).path}"
             ) from None
@@ -183,7 +183,7 @@ def fetch_documents(start: date, end: date) -> list[bytes]:
 
     settings = get_ibkr_settings()
 
-    with httpx.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS) as http:
+    with httpx2.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS) as http:
         client = FlexClient(
             settings.ibkr_flex_token.get_secret_value(),
             settings.ibkr_flex_query_id,
