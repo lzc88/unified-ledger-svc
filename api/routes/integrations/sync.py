@@ -78,11 +78,15 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
 
     @router.get("/jobs/{job_id}")
     def get_job(
-        job_id: uuid.UUID, session_factory: SessionFactory, broker: Broker
+        job_id: uuid.UUID, session_factory: SessionFactory, broker: Broker, user_id: str
     ) -> Job:
         with session_factory() as session:
             job = session.get(SyncJob, job_id)
-            if job is None or job.from_broker_id != broker.broker_id:
+            if (
+                job is None
+                or job.from_broker_id != broker.broker_id
+                or job.from_user_id != user_id
+            ):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
             return Job.model_validate(job)
 
