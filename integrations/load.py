@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,6 @@ from database.models import (
     ExecutedTradeOrder,
     FxFee,
     TradeFee,
-    User,
 )
 
 from .base import BrokerAdapter, MappingResult, Row
@@ -28,14 +27,12 @@ def load(
     session: Session, broker: BrokerAdapter, result: MappingResult, user_id: str
 ) -> dict[str, int]:
     broker_id = broker.broker_id
-    user_name = next(iter(result.account_names.values()), user_id)
     inserted = {
         "brokers": _insert_new(
             session,
             Broker,
             [{"broker_id": broker_id, "broker_name": broker.broker_name}],
         ),
-        "users": _upsert_user(session, user_id, user_name),
     }
 
     def stamp(rows: dict) -> list[Row]:
@@ -90,16 +87,6 @@ def known_broker_assets(
             )
         )
     )
-
-
-def _upsert_user(session: Session, user_id: str, user_name: str) -> int:
-    statement = insert(User).values(user_id=user_id, user_name=user_name)
-    statement = statement.on_conflict_do_update(
-        index_elements=[User.user_id],
-        set_={"user_name": statement.excluded.user_name, "updated_at": func.now()},
-        where=User.user_name == User.user_id,
-    ).returning(User.user_id)
-    return len(session.scalars(statement).all())
 
 
 def _insert_new(session: Session, model: type[Base], rows: list[Row]) -> int:

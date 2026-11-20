@@ -22,7 +22,6 @@ from database.models import (
     SyncJob,
     SyncKind,
     SyncStatus,
-    User,
 )
 
 from .base import BrokerAdapter, FormatError, IntegrationError
@@ -99,9 +98,6 @@ def create_job(
         insert(Broker)
         .values(broker_id=broker.broker_id, broker_name=broker.broker_name)
         .on_conflict_do_nothing()
-    )
-    session.execute(
-        insert(User).values(user_id=user_id, user_name=user_id).on_conflict_do_nothing()
     )
     job = SyncJob(
         from_user_id=user_id,

@@ -119,7 +119,21 @@ class User(Timestamped, Base):
     __tablename__ = "users"
 
     user_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    user_name: Mapped[str] = mapped_column(String(100))
+    user_name: Mapped[str] = mapped_column(String(100), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+
+
+class UserSession(Timestamped, Base):
+    __tablename__ = "user_sessions"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Account(Timestamped, Base):

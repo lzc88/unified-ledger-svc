@@ -1,5 +1,6 @@
 import os
 
+from datetime import timedelta
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -72,6 +73,11 @@ OPENFIGI_RATE_LIMIT_BACKOFF = 60.0
 OPENFIGI_MAX_ATTEMPTS = 3
 
 SYNC_REFRESH_OVERLAP_DAYS = 7
+
+AUTH_COOKIE_NAME = "session"
+AUTH_JWT_ALGORITHM = "HS256"
+AUTH_SESSION_TTL = timedelta(days=7)
+AUTH_JWT_SECRET_MIN_LENGTH = 32
 
 API_JOBS_DEFAULT_LIMIT = 20
 API_JOBS_MAX_LIMIT = 100
@@ -151,6 +157,23 @@ class IbkrSettings(BaseSettings):
     ibkr_flex_query_id: str
 
 
+class AuthSettings(BaseSettings):
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    auth_jwt_secret: SecretStr
+    auth_cookie_secure: bool = True
+
+    @field_validator("auth_jwt_secret")
+    @classmethod
+    def _long_enough(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) < AUTH_JWT_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"AUTH_JWT_SECRET must be at least {AUTH_JWT_SECRET_MIN_LENGTH} characters"
+            )
+        return value
+
+
 class OpenFigiSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
@@ -175,6 +198,11 @@ def get_ibkr_settings() -> IbkrSettings:
     return IbkrSettings(
         _env_file=_existing_env_file()  # pyright: ignore[reportCallIssue]
     )
+
+
+@lru_cache
+def get_auth_settings() -> AuthSettings:
+    return AuthSettings(_env_file=_existing_env_file())  # pyright: ignore[reportCallIssue]
 
 
 @lru_cache
