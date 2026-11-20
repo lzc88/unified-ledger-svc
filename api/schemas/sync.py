@@ -1,16 +1,12 @@
 import uuid
 from datetime import date, datetime
-from typing import Annotated, Any, Self
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from database.models import SyncKind, SyncStatus
 
-UserId = Annotated[str, Field(min_length=1, max_length=100)]
-
-
 class BackfillRequest(BaseModel):
-    user_id: UserId
     start: date
     end: date
 
@@ -19,10 +15,6 @@ class BackfillRequest(BaseModel):
         if self.start > self.end:
             raise ValueError("start must not be after end")
         return self
-
-
-class RefreshRequest(BaseModel):
-    user_id: UserId
 
 
 class Job(BaseModel):

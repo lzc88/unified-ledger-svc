@@ -6,8 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, sessionmaker
 
-from api.deps import Figi, SessionFactory
-from api.schemas.sync import BackfillRequest, Job, RefreshRequest
+from api.deps import CurrentUser, Figi, SessionFactory
+from api.schemas.sync import BackfillRequest, Job
 from config.config import API_JOBS_DEFAULT_LIMIT, API_JOBS_MAX_LIMIT
 from database.models import SyncJob, SyncKind
 from integrations.base import BrokerAdapter
@@ -30,6 +30,7 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
     @router.post("/backfill", status_code=status.HTTP_202_ACCEPTED)
     def backfill(
         body: BackfillRequest,
+        user: CurrentUser,
         background: BackgroundTasks,
         session_factory: SessionFactory,
         broker: Broker,
@@ -40,14 +41,14 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
             background,
             broker,
             figi,
-            body.user_id,
+            user.user_id,
             SyncKind.BACKFILL,
             lambda _: (body.start, body.end),
         )
 
     @router.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
     def refresh(
-        body: RefreshRequest,
+        user: CurrentUser,
         background: BackgroundTasks,
         session_factory: SessionFactory,
         broker: Broker,
@@ -58,34 +59,34 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
             background,
             broker,
             figi,
-            body.user_id,
+            user.user_id,
             SyncKind.REFRESH,
-            lambda session: refresh_range(session, broker, body.user_id, date.today()),
+            lambda session: refresh_range(session, broker, user.user_id, date.today()),
         )
 
     @router.get("/jobs")
     def list_jobs(
+        user: CurrentUser,
         session_factory: SessionFactory,
         broker: Broker,
-        user_id: str,
         limit: Annotated[
             int, Query(ge=1, le=API_JOBS_MAX_LIMIT)
         ] = API_JOBS_DEFAULT_LIMIT,
     ) -> list[Job]:
         with session_factory() as session:
-            jobs = latest_jobs(session, broker.broker_id, user_id, limit)
+            jobs = latest_jobs(session, broker.broker_id, user.user_id, limit)
             return [Job.model_validate(job) for job in jobs]
 
     @router.get("/jobs/{job_id}")
     def get_job(
-        job_id: uuid.UUID, session_factory: SessionFactory, broker: Broker, user_id: str
+        job_id: uuid.UUID, user: CurrentUser, session_factory: SessionFactory, broker: Broker
     ) -> Job:
         with session_factory() as session:
             job = session.get(SyncJob, job_id)
             if (
                 job is None
                 or job.from_broker_id != broker.broker_id
-                or job.from_user_id != user_id
+                or job.from_user_id != user.user_id
             ):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
             return Job.model_validate(job)

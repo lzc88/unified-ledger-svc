@@ -2,9 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from api.deps import SessionFactory
+from api.deps import CurrentUser, SessionFactory
 from config.config import LEDGER_DEFAULT_LIMIT, LEDGER_MAX_LIMIT
-from database.models import User
 from portfolio.activity import InvalidCursorError, LedgerActivity, ledger_page
 from portfolio.records import EntryKind
 
@@ -13,7 +12,7 @@ router = APIRouter(prefix="/ledger", tags=["ledger"])
 
 @router.get("")
 def get_ledger(
-    user_id: str,
+    user: CurrentUser,
     session_factory: SessionFactory,
     limit: Annotated[int, Query(ge=1, le=LEDGER_MAX_LIMIT)] = LEDGER_DEFAULT_LIMIT,
     cursor: str | None = None,
@@ -21,13 +20,10 @@ def get_ledger(
     asset_id: str | None = None,
 ) -> LedgerActivity:
     with session_factory() as session:
-        if session.get(User, user_id) is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
-
         try:
             return ledger_page(
                 session,
-                user_id,
+                user.user_id,
                 limit=limit,
                 cursor=cursor,
                 kind=kind,
