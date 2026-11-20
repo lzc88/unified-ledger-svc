@@ -136,6 +136,16 @@ class UserSession(Timestamped, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class UserConfig(Timestamped, Base):
+    __tablename__ = "user_configs"
+
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), primary_key=True
+    )
+    config_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    encrypted_value: Mapped[str] = mapped_column(Text)
+
+
 class Account(Timestamped, Base):
     __tablename__ = "accounts"
 

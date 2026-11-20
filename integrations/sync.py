@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Any
@@ -22,6 +23,12 @@ from database.models import (
     SyncJob,
     SyncKind,
     SyncStatus,
+)
+from user_config.service import (
+    ConfigMissingError,
+    ConfigUnreadableError,
+    require,
+    resolve,
 )
 
 from .base import BrokerAdapter, FormatError, IntegrationError
@@ -125,7 +132,7 @@ def create_job(
 def run_job(
     session_factory: sessionmaker[Session],
     broker: BrokerAdapter,
-    figi: OpenFigiClient,
+    figi_factory: Callable[[str | None], OpenFigiClient],
     job_id: uuid.UUID,
 ) -> None:
     with session_factory.begin() as session:
@@ -136,10 +143,14 @@ def run_job(
 
     outcome: dict[str, Any] = {"status": SyncStatus.FAILED}
     try:
-        result = broker.map(broker.fetch(start, end))
+        with session_factory() as session:
+            config = resolve(session, user_id)
+        require(config, broker.config_keys, broker.broker_id)
+
+        result = broker.map(broker.fetch(start, end, config))
         with session_factory() as session:
             known = known_broker_assets(session, broker.broker_id, result.assets)
-        assign_figis(result, known, figi)
+        assign_figis(result, known, figi_factory(config.get("OPENFIGI_API_KEY")))
         with session_factory.begin() as session:
             inserted = load(session, broker, result, user_id)
         outcome = {
@@ -147,7 +158,13 @@ def run_job(
             "inserted": inserted,
             "skipped": [asdict(row) for row in result.skipped],
         }
-    except (IntegrationError, FormatError, ValueError) as exc:
+    except (
+        ConfigMissingError,
+        ConfigUnreadableError,
+        IntegrationError,
+        FormatError,
+        ValueError,
+    ) as exc:
         outcome["error"] = str(exc)
     except Exception:
         log.exception("sync job %s failed", job_id)

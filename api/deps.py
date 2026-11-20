@@ -1,4 +1,4 @@
-from functools import lru_cache
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -12,7 +12,7 @@ from database.db import SessionLocal
 from database.models import User
 from integrations.base import BrokerAdapter
 from integrations.ibkr import IbkrAdapter
-from integrations.openfigi import OpenFigiClient, client_from_settings
+from integrations.openfigi import OpenFigiClient
 from portfolio.market import MarketData, YahooMarketData
 
 _market_data = YahooMarketData()
@@ -30,9 +30,8 @@ def get_ibkr_adapter() -> BrokerAdapter:
     return _ibkr
 
 
-@lru_cache
-def get_openfigi_client() -> OpenFigiClient:
-    return client_from_settings()
+def get_openfigi_factory() -> Callable[[str | None], OpenFigiClient]:
+    return OpenFigiClient
 
 
 def get_market_data() -> MarketData:
@@ -40,7 +39,9 @@ def get_market_data() -> MarketData:
 
 
 SessionFactory = Annotated[sessionmaker[Session], Depends(get_session_factory)]
-Figi = Annotated[OpenFigiClient, Depends(get_openfigi_client)]
+FigiFactory = Annotated[
+    Callable[[str | None], OpenFigiClient], Depends(get_openfigi_factory)
+]
 Market = Annotated[MarketData, Depends(get_market_data)]
 
 

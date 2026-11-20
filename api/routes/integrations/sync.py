@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, sessionmaker
 
-from api.deps import CurrentUser, Figi, SessionFactory
+from api.deps import CurrentUser, FigiFactory, SessionFactory
 from api.schemas.sync import BackfillRequest, Job
 from config.config import API_JOBS_DEFAULT_LIMIT, API_JOBS_MAX_LIMIT
 from database.models import SyncJob, SyncKind
@@ -19,6 +19,12 @@ from integrations.sync import (
     latest_jobs,
     refresh_range,
     run_job,
+)
+from user_config.service import (
+    ConfigMissingError,
+    ConfigUnreadableError,
+    require,
+    resolve,
 )
 
 
@@ -34,13 +40,13 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
         background: BackgroundTasks,
         session_factory: SessionFactory,
         broker: Broker,
-        figi: Figi,
+        figi_factory: FigiFactory,
     ) -> Job:
         return _start(
             session_factory,
             background,
             broker,
-            figi,
+            figi_factory,
             user.user_id,
             SyncKind.BACKFILL,
             lambda _: (body.start, body.end),
@@ -52,13 +58,13 @@ def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
         background: BackgroundTasks,
         session_factory: SessionFactory,
         broker: Broker,
-        figi: Figi,
+        figi_factory: FigiFactory,
     ) -> Job:
         return _start(
             session_factory,
             background,
             broker,
-            figi,
+            figi_factory,
             user.user_id,
             SyncKind.REFRESH,
             lambda session: refresh_range(session, broker, user.user_id, date.today()),
@@ -98,19 +104,26 @@ def _start(
     session_factory: sessionmaker[Session],
     background: BackgroundTasks,
     broker: BrokerAdapter,
-    figi: OpenFigiClient,
+    figi_factory: Callable[[str | None], OpenFigiClient],
     user_id: str,
     kind: SyncKind,
     date_range: Callable[[Session], tuple[date, date]],
 ) -> Job:
     try:
         with session_factory.begin() as session:
+            require(resolve(session, user_id), broker.config_keys, broker.broker_id)
+
             start, end = date_range(session)
             job = create_job(session, broker, user_id, kind, start, end)
             session.flush()
             session.refresh(job)
             created = Job.model_validate(job)
-    except (ActiveJobError, NoActivityError) as exc:
+    except (
+        ActiveJobError,
+        NoActivityError,
+        ConfigMissingError,
+        ConfigUnreadableError,
+    ) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    background.add_task(run_job, session_factory, broker, figi, created.job_id)
+    background.add_task(run_job, session_factory, broker, figi_factory, created.job_id)
     return created

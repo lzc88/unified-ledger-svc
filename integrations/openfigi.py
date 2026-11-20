@@ -16,7 +16,6 @@ from config.config import (
     OPENFIGI_MAPPING_URL,
     OPENFIGI_MAX_ATTEMPTS,
     OPENFIGI_RATE_LIMIT_BACKOFF,
-    get_openfigi_settings,
 )
 from integrations.base import AssetIdentity, IntegrationError, MappingResult, Row
 
@@ -120,11 +119,6 @@ def assign_figis(
             )
         else:
             result.assets[broker_asset_id].update(listing)
-
-
-def client_from_settings() -> OpenFigiClient:
-    api_key = get_openfigi_settings().openfigi_api_key
-    return OpenFigiClient(api_key.get_secret_value() if api_key else None)
 
 
 def _job(identity: AssetIdentity) -> dict[str, str]:

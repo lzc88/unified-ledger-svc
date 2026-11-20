@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield
 
 
-SECRET_FIELDS = frozenset({"password"})
+SECRET_FIELDS = frozenset({"password", "value"})
 
 
 app = FastAPI(title="unified-ledger-svc", lifespan=lifespan)

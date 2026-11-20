@@ -18,7 +18,6 @@ from config.config import (
     IBKR_FLEX_RETRYABLE_CODES,
     IBKR_FLEX_SEND_REQUEST_URL,
     IBKR_FLEX_USER_AGENT,
-    get_ibkr_settings,
 )
 from integrations.base import IntegrationError
 
@@ -179,16 +178,10 @@ class FlexClient:
         self._last_request = time.monotonic()
 
 
-def fetch_documents(start: date, end: date) -> list[bytes]:
-
-    settings = get_ibkr_settings()
+def fetch_documents(token: str, query_id: str, start: date, end: date) -> list[bytes]:
 
     with httpx2.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS) as http:
-        client = FlexClient(
-            settings.ibkr_flex_token.get_secret_value(),
-            settings.ibkr_flex_query_id,
-            http=http,
-        )
+        client = FlexClient(token, query_id, http=http)
 
         return client.fetch_range(start, end)
 
