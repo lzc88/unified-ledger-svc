@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from functools import cache
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -30,8 +31,13 @@ def get_ibkr_adapter() -> BrokerAdapter:
     return _ibkr
 
 
+@cache
+def _openfigi_client(api_key: str | None) -> OpenFigiClient:
+    return OpenFigiClient(api_key)
+
+
 def get_openfigi_factory() -> Callable[[str | None], OpenFigiClient]:
-    return OpenFigiClient
+    return _openfigi_client
 
 
 def get_market_data() -> MarketData:
