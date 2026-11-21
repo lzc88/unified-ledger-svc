@@ -106,6 +106,9 @@ def update_account(
         raise ValueError(f"cannot update {', '.join(sorted(unknown))}")
 
     row = _owned(session, user_id, account_id)
+    if not changes:
+        return row
+
     with _savepoint(session):
         for field, value in changes.items():
             setattr(row, field, value)
