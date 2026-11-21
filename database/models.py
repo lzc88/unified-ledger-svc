@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
     text,
@@ -119,7 +120,56 @@ class User(Timestamped, Base):
     __tablename__ = "users"
 
     user_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    user_name: Mapped[str] = mapped_column(String(100))
+    user_name: Mapped[str] = mapped_column(String(100), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+
+
+class UserSession(Timestamped, Base):
+    __tablename__ = "user_sessions"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserConfig(Timestamped, Base):
+    __tablename__ = "user_configs"
+
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), primary_key=True
+    )
+    config_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    encrypted_value: Mapped[str] = mapped_column(Text)
+
+
+class CashAccount(Timestamped, Base):
+    __tablename__ = "cash_accounts"
+
+    cash_account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id")
+    )
+    institution: Mapped[str] = mapped_column(String(100))
+    label: Mapped[str] = mapped_column(String(100))
+    balance: Mapped[Decimal] = mapped_column(Amount)
+    currency: Mapped[str] = mapped_column(CHAR(3))
+    interest_rate: Mapped[Decimal | None] = mapped_column(Amount)
+
+    __table_args__ = (
+        UniqueConstraint("from_user_id", "institution", "label"),
+        CheckConstraint("balance >= 0", name="balance_non_negative"),
+        CheckConstraint(
+            "interest_rate >= 0 AND interest_rate <= 100", name="interest_rate_range"
+        ),
+        _currency_check("currency"),
+    )
 
 
 class Account(Timestamped, Base):

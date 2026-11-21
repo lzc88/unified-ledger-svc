@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Protocol
@@ -79,7 +79,10 @@ class BrokerAdapter(Protocol):
     broker_id: str
     broker_name: str
     timezone: ZoneInfo
+    config_keys: tuple[str, ...]
 
-    def fetch(self, start: date, end: date) -> list[bytes]: ...
+    def fetch(
+        self, start: date, end: date, config: Mapping[str, str]
+    ) -> list[bytes]: ...
 
     def map(self, documents: Iterable[bytes]) -> MappingResult: ...

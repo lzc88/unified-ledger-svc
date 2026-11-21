@@ -23,11 +23,9 @@ fi
 echo "==> Syncing dependencies"
 uv sync
 
-if [[ "$APP_ENV" == "local" ]]; then
-    docker info >/dev/null 2>&1 || { echo "Docker is not running" >&2; exit 1; }
-    echo "==> Starting local Postgres"
-    docker compose up -d --wait
-fi
+docker info >/dev/null 2>&1 || { echo "Docker is not running" >&2; exit 1; }
+echo "==> Starting local Postgres"
+docker compose up -d --wait
 
 echo "==> Applying migrations (APP_ENV=$APP_ENV)"
 .venv/bin/alembic upgrade head

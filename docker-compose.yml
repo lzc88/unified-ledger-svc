@@ -2,12 +2,11 @@ name: unified-ledger-svc
 
 services:
   db:
-    image: supabase/postgres:17.11.0.004
+    image: postgres:17
     ports:
-      - "54322:5432"
+      - "127.0.0.1:54322:5432"
     environment:
       POSTGRES_PASSWORD: postgres
-    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

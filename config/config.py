@@ -1,10 +1,13 @@
 import os
 
+from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from cryptography.fernet import Fernet
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL, make_url
@@ -73,6 +76,51 @@ OPENFIGI_MAX_ATTEMPTS = 3
 
 SYNC_REFRESH_OVERLAP_DAYS = 7
 
+AUTH_COOKIE_NAME = "session"
+AUTH_JWT_ALGORITHM = "HS256"
+AUTH_SESSION_TTL = timedelta(days=7)
+AUTH_JWT_SECRET_MIN_LENGTH = 32
+
+
+@dataclass(frozen=True)
+class ConfigKey:
+    group: str
+    label: str
+    description: str
+    secret: bool
+    required: bool
+
+
+CONFIG_KEYS = {
+    "IBKR_FLEX_TOKEN": ConfigKey(
+        group="ibkr",
+        label="Flex token",
+        description="IBKR Flex Web Service token",
+        secret=True,
+        required=True,
+    ),
+    "IBKR_FLEX_QUERY_ID": ConfigKey(
+        group="ibkr",
+        label="Flex query ID",
+        description="IBKR Flex query ID",
+        secret=False,
+        required=True,
+    ),
+    "OPENFIGI_API_KEY": ConfigKey(
+        group="openfigi",
+        label="API key",
+        description="OpenFIGI API key (optional, raises rate limits)",
+        secret=True,
+        required=False,
+    ),
+}
+IBKR_CONFIG_KEYS = ("IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID")
+CONFIG_VALUE_MAX_LENGTH = 512
+CONFIG_MASK_CHAR = "•"
+CONFIG_MASK_LENGTH = 8
+CONFIG_MASK_VISIBLE_CHARS = 4
+CONFIG_MASK_MIN_LENGTH_TO_REVEAL = 12
+
 API_JOBS_DEFAULT_LIMIT = 20
 API_JOBS_MAX_LIMIT = 100
 
@@ -110,7 +158,6 @@ CONFIG_DIR = Path(__file__).parent
 
 ENV_FILES = {
     "local": CONFIG_DIR / ".env.local",
-    "remote": CONFIG_DIR / ".env",
     "test": CONFIG_DIR / ".env.test",
 }
 
@@ -143,19 +190,40 @@ class Settings(BaseSettings):
         return url.set(drivername="postgresql+psycopg")
 
 
-class IbkrSettings(BaseSettings):
+class AuthSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
-    ibkr_flex_token: SecretStr
-    ibkr_flex_query_id: str
+    auth_jwt_secret: SecretStr
+    auth_cookie_secure: bool = True
+
+    @field_validator("auth_jwt_secret")
+    @classmethod
+    def _long_enough(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) < AUTH_JWT_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"AUTH_JWT_SECRET must be at least {AUTH_JWT_SECRET_MIN_LENGTH} characters"
+            )
+        return value
 
 
-class OpenFigiSettings(BaseSettings):
+class ConfigStoreSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
-    openfigi_api_key: SecretStr | None = None
+    config_encryption_key: SecretStr
+
+    @field_validator("config_encryption_key")
+    @classmethod
+    def _valid_fernet_key(cls, value: SecretStr) -> SecretStr:
+        try:
+            Fernet(value.get_secret_value())
+        except ValueError:
+            raise ValueError(
+                "CONFIG_ENCRYPTION_KEY must be a Fernet key "
+                "(generate one with Fernet.generate_key())"
+            ) from None
+        return value
 
 
 def _existing_env_file() -> Path:
@@ -171,14 +239,12 @@ def get_settings() -> Settings:
 
 
 @lru_cache
-def get_ibkr_settings() -> IbkrSettings:
-    return IbkrSettings(
-        _env_file=_existing_env_file()  # pyright: ignore[reportCallIssue]
-    )
+def get_auth_settings() -> AuthSettings:
+    return AuthSettings(_env_file=_existing_env_file())  # pyright: ignore[reportCallIssue]
 
 
 @lru_cache
-def get_openfigi_settings() -> OpenFigiSettings:
-    return OpenFigiSettings(
+def get_config_store_settings() -> ConfigStoreSettings:
+    return ConfigStoreSettings(
         _env_file=_existing_env_file()  # pyright: ignore[reportCallIssue]
     )
