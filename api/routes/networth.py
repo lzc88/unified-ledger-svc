@@ -6,6 +6,7 @@ from api.deps import CurrentUser, Market, SessionFactory
 from api.schemas.portfolio import Currency
 from cash.service import list_accounts
 from config.config import PORTFOLIO_DEFAULT_CURRENCY
+from cpf.service import find_statement
 from portfolio.events import ledger_events
 from portfolio.ledger import LedgerError
 from portfolio.networth import NetWorth, build_net_worth
@@ -19,14 +20,23 @@ def get_net_worth(
     session_factory: SessionFactory,
     market: Market,
     currency: Currency = PORTFOLIO_DEFAULT_CURRENCY,
+    include_cpf: bool = False,
 ) -> NetWorth:
     with session_factory() as session:
         events = ledger_events(session, user.user_id)
         accounts = list_accounts(session, user.user_id)
+        cpf = find_statement(session, user.user_id)
 
     try:
         return build_net_worth(
-            user.user_id, events, accounts, market, currency, date.today()
+            user.user_id,
+            events,
+            accounts,
+            market,
+            currency,
+            date.today(),
+            cpf=cpf,
+            include_cpf=include_cpf,
         )
     except LedgerError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
