@@ -130,6 +130,88 @@ LEDGER_MAX_LIMIT = 200
 PORTFOLIO_DEFAULT_CURRENCY = "SGD"
 PORTFOLIO_DUST = Decimal("0.000001")
 
+"""
+CPF statement configuration and constants.
+"""
+
+CPF_CURRENCY = "SGD"
+CPF_TIMEZONE = ZoneInfo("Asia/Singapore")
+CPF_ACCOUNTS = ("oa", "sa", "ma")
+CPF_MAX_TRANSACTIONS = 5000
+CPF_EMPLOYER_MAX_LENGTH = 200
+CPF_CODES = {
+    "ADJ": "Adjustment / Interest on recovered CPF contributions",
+    "AMP": "Additional Monthly Payout",
+    "APK": "Government Top-up: Assurance Package",
+    "BAL": "Balance",
+    "CLA": "CPF LIFE Premium",
+    "CLC": "CPF LIFE Change of plan",
+    "CLI": "CPF LIFE Payout",
+    "CLR": "Refund from CPF LIFE",
+    "CLS": "CPF LIFE Switch of plan",
+    "CON": "Contributions / Government Cash Grant / Government Top-up",
+    "CSA": (
+        "Transfer of Special Account savings to Retirement Account / "
+        "Ordinary Account due to closure of your Special Account"
+    ),
+    "CSL": "CareShield Life",
+    "DPS": "Dependants' Protection Scheme",
+    "EDN": "CPF Education Loan Scheme",
+    "ESB": "Government Top-up: Earn and Save Bonus",
+    "ESH": "Basic ElderShield",
+    "GCH": "GovCash",
+    "GOV": "Government Cash Benefits",
+    "GSV": "Government Top-up: GST Voucher",
+    "HHG": "CPF Housing Grant from HDB",
+    "HPC": "Home Protection Scheme Claim",
+    "HPR": "Home Protection Scheme Rebate",
+    "HPS": "Home Protection Scheme",
+    "HSE": "HDB flats and other residential properties",
+    "INT": "Interest for the whole year",
+    "INV": "CPF Investment Scheme",
+    "IPA": "Government Top-up: ITE Progression Award",
+    "LFM": "Government Top-up: Large Family MediSave Grant",
+    "LTC": "Long-term care withdrawals under MediSave Care",
+    "MCI": "MediSave Contribution by Institution",
+    "MED": "MediSave deduction or reimbursement for medical expenses",
+    "MGN": "Government Top-up: MediSave Grant for Newborns",
+    "MGP": "Government Top-up: Merdeka Generation Package",
+    "MHG": "CPF Grant from MSF",
+    "MMS": "Government Top-up: Matched MediSave Scheme Grant",
+    "MRS": "Matched Retirement Savings Scheme Grant",
+    "MSB": "Government Top-up: MediSave Bonus",
+    "MSH": "MediShield",
+    "MSL": "MediShield Life / MediShield Life component of an Integrated Shield Plan",
+    "NSA": "Government Top-up: NS HOME Awards",
+    "ORN": "Government Top-up: ORNS Completion Award",
+    "PCT": "Platform Workers CPF Transition Support",
+    "PGP": "Government Top-up: Pioneer Generation Package",
+    "PMI": (
+        "Additional private insurance coverage component of an "
+        "Integrated Shield Plan / Non-Integrated Shield Plan"
+    ),
+    "PSE": "Post Secondary Education Account",
+    "PTY": "Non-residential property",
+    "RFD": (
+        "Refund of contributions to employer / employee / self-employed person "
+        "or of Government Cash Grant"
+    ),
+    "RLE": "Withdrawal of CPF savings on reduced life expectancy",
+    "RSB": "Government Top-up: Retirement Savings Bonus",
+    "RSS": "Retirement Sum Scheme",
+    "RST": "Top-ups under CPF Retirement Sum Topping-Up Scheme",
+    "SDS": (
+        "Dividends / proceeds / adjustments under the Special Discounted "
+        "Shares Scheme (e.g. Singtel shares)"
+    ),
+    "SE": "Payment by self-employed person",
+    "SNS": "Special Needs Savings Scheme",
+    "SUP": "ElderShield Supplement / CareShield Life Supplement",
+    "TFR": "Transfer between accounts",
+    "WDL": "Withdrawal of CPF savings",
+    "WIS": "Government Top-up: Workfare Income Supplement",
+}
+
 MARKET_CACHE_TTL_SECONDS = 300
 MARKET_EXCH_CODE_SUFFIXES = {
     "US": "",
