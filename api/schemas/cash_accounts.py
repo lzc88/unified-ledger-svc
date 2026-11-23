@@ -3,34 +3,31 @@ from typing import Annotated, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from config.config import CashCurrency
+
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
 ]
-Currency = Annotated[str, StringConstraints(pattern="^[A-Z]{3}$")]
+Currency = CashCurrency
 Balance = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
-Rate = Annotated[Decimal, Field(ge=0, le=100, allow_inf_nan=False)]
 
-NON_NULLABLE = ("institution", "label", "balance", "currency")
+NON_NULLABLE = ("label", "balance", "currency")
 
 
 class CashAccountCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    institution: Text
     label: Text
     balance: Balance
     currency: Currency
-    interest_rate: Rate | None = None
 
 
 class CashAccountUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    institution: Text | None = None
     label: Text | None = None
     balance: Balance | None = None
     currency: Currency | None = None
-    interest_rate: Rate | None = None
 
     @model_validator(mode="after")
     def _reject_null_required_fields(self) -> Self:

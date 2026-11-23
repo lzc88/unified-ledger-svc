@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from cash.service import CashAccountView, estimated_interest
+from cash.service import CashAccountView
 from config.config import CPF_CURRENCY
 from cpf.service import closing_total
 from database.models import CashAccount, CpfStatement
@@ -26,7 +26,6 @@ class ValuedCashAccount(CashAccountView):
 
 class Cash(BaseModel):
     value: float | None
-    estimated_annual_interest: float | None
     accounts: list[ValuedCashAccount]
 
 
@@ -68,11 +67,6 @@ def build_net_worth(
     fx_rates |= {c: float(r) for c, r in fx.items() if r is not None}
 
     cash_value = _sum(_mul(row.balance, fx[row.currency]) for row in accounts)
-    interest = _sum(
-        _mul(estimated_interest(row.balance, row.interest_rate), fx[row.currency])
-        for row in accounts
-        if row.interest_rate is not None
-    )
 
     invested = investments.value
     invested_value = None if invested is None else Decimal(str(invested))
@@ -90,7 +84,6 @@ def build_net_worth(
         investments=investments,
         cash=Cash(
             value=_float(cash_value),
-            estimated_annual_interest=_float(interest),
             accounts=[_valued(row, fx) for row in accounts],
         ),
         cpf=None if cpf is None else _cpf(cpf, fx[CPF_CURRENCY]),
