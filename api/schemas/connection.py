@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from api.schemas.config import ConfigValue
+from api.schemas.sync import SyncState
 
 
 class IbkrConnectionUpdate(BaseModel):
@@ -18,3 +19,4 @@ class IbkrConnection(BaseModel):
     query_id: str | None
     token: str | None
     updated_at: datetime | None
+    sync: SyncState

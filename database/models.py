@@ -37,34 +37,10 @@ class ListingCategory(enum.StrEnum):
     ETF = "ETF"
 
 
-class CashAction(enum.StrEnum):
-    DEPOSIT = "DEPOSIT"
-    WITHDRAW = "WITHDRAW"
-
-
-class OrderAction(enum.StrEnum):
-    BUY = "BUY"
-    SELL = "SELL"
-
-
-class FeeType(enum.StrEnum):
-    COMMISSION = "COMMISSION"
-    TAX = "TAX"
-
-
-class SyncKind(enum.StrEnum):
-    BACKFILL = "BACKFILL"
-    REFRESH = "REFRESH"
-
-
 class SyncStatus(enum.StrEnum):
-    PENDING = "PENDING"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
-
-
-ACTIVE_SYNC_STATUSES = (SyncStatus.PENDING, SyncStatus.RUNNING)
 
 
 def _enum(cls: type[enum.Enum], name: str) -> Enum:
@@ -243,6 +219,9 @@ class ForecastPlan(Timestamped, Base):
     end_month: Mapped[date] = mapped_column(Date)
     remainder_destination_id: Mapped[str | None] = mapped_column(String(64))
     destinations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    rates: Mapped[dict[str, float]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )
 
     __table_args__ = (
         CheckConstraint("gross_income >= 0", name="gross_income_non_negative"),
@@ -262,6 +241,14 @@ class BrokerConnection(Timestamped, Base):
         String(100), ForeignKey("brokers.broker_id"), primary_key=True
     )
     credentials: Mapped[str] = mapped_column(Text)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_status: Mapped[SyncStatus | None] = mapped_column(
+        _enum(SyncStatus, "last_sync_status")
+    )
+    last_sync_error: Mapped[str | None] = mapped_column(Text)
+    last_sync_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 class Account(Timestamped, Base):
@@ -283,220 +270,80 @@ class Account(Timestamped, Base):
     )
 
 
-class ExecutedCash(Timestamped, Base):
-    __tablename__ = "executed_cash"
+class SnapshotDay(Timestamped, Base):
+    __tablename__ = "account_snapshots"
 
-    cash_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
     from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_account_id: Mapped[str] = mapped_column(String(100))
-    tx_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    action: Mapped[CashAction] = mapped_column(_enum(CashAction, "action"))
-    tx_amount: Mapped[Decimal] = mapped_column(Amount)
-    tx_currency: Mapped[str] = mapped_column(CHAR(3))
+    from_account_id: Mapped[str] = mapped_column(String(100), primary_key=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["from_account_id", "from_broker_id"],
             ["accounts.account_id", "accounts.from_broker_id"],
+            ondelete="CASCADE",
         ),
-        Index("ix_executed_cash_account", "from_account_id", "from_broker_id"),
-        CheckConstraint("tx_amount > 0", name="tx_amount_positive"),
-        _currency_check("tx_currency"),
+        Index(
+            "ix_account_snapshots_account_date",
+            "from_account_id",
+            "from_broker_id",
+            "snapshot_date",
+        ),
     )
 
 
-class ExecutedTradeOrder(Timestamped, Base):
-    __tablename__ = "executed_trade_orders"
+class PositionSnapshot(Timestamped, Base):
+    __tablename__ = "position_snapshots"
 
-    trade_order_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
     from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_account_id: Mapped[str] = mapped_column(String(100))
-    from_broker_asset_id: Mapped[str] = mapped_column(String(100))
-    action: Mapped[OrderAction] = mapped_column(_enum(OrderAction, "action"))
-    order_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    from_account_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    from_broker_asset_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    quantity: Mapped[Decimal] = mapped_column(Amount)
+    cost_basis: Mapped[Decimal] = mapped_column(Amount)
+    currency: Mapped[str] = mapped_column(CHAR(3))
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["from_account_id", "from_broker_id"],
             ["accounts.account_id", "accounts.from_broker_id"],
+            ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
             ["from_broker_asset_id", "from_broker_id"],
             ["broker_assets.broker_asset_id", "broker_assets.from_broker_id"],
         ),
-        Index("ix_executed_trade_orders_account", "from_account_id", "from_broker_id"),
         Index(
-            "ix_executed_trade_orders_broker_asset",
-            "from_broker_asset_id",
+            "ix_position_snapshots_account_date",
+            "from_account_id",
             "from_broker_id",
+            "snapshot_date",
         ),
+        CheckConstraint("quantity <> 0", name="quantity_non_zero"),
+        _currency_check("currency"),
     )
 
 
-class ExecutedTrade(Timestamped, Base):
-    __tablename__ = "executed_trades"
+class CashSnapshot(Timestamped, Base):
+    __tablename__ = "cash_snapshots"
 
-    trade_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)
     from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_trade_order_id: Mapped[str] = mapped_column(String(100))
-    trade_amount: Mapped[Decimal] = mapped_column(Amount)
-    trade_quantity: Mapped[Decimal] = mapped_column(Amount)
-    trade_price: Mapped[Decimal] = mapped_column(Amount)
-    trade_currency: Mapped[str] = mapped_column(CHAR(3))
-    trade_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["from_trade_order_id", "from_broker_id"],
-            [
-                "executed_trade_orders.trade_order_id",
-                "executed_trade_orders.from_broker_id",
-            ],
-        ),
-        Index("ix_executed_trades_order", "from_trade_order_id", "from_broker_id"),
-        CheckConstraint("trade_amount >= 0", name="trade_amount_non_negative"),
-        CheckConstraint("trade_quantity > 0", name="trade_quantity_positive"),
-        CheckConstraint("trade_price >= 0", name="trade_price_non_negative"),
-        _currency_check("trade_currency"),
-    )
-
-
-class TradeFee(Timestamped, Base):
-    __tablename__ = "trade_fees"
-
-    from_trade_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    trade_fee_type: Mapped[FeeType] = mapped_column(
-        _enum(FeeType, "trade_fee_type"), primary_key=True
-    )
-    trade_fee_amount: Mapped[Decimal] = mapped_column(Amount)
-    trade_fee_currency: Mapped[str] = mapped_column(CHAR(3))
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["from_trade_id", "from_broker_id"],
-            ["executed_trades.trade_id", "executed_trades.from_broker_id"],
-        ),
-        CheckConstraint("trade_fee_amount > 0", name="trade_fee_amount_positive"),
-        _currency_check("trade_fee_currency"),
-    )
-
-
-class CanonicalFx(Timestamped, Base):
-    __tablename__ = "canonical_fx"
-
-    fx_pair_id: Mapped[str] = mapped_column(String(16), primary_key=True)
-    fx_long_currency: Mapped[str] = mapped_column(CHAR(3))
-    fx_short_currency: Mapped[str] = mapped_column(CHAR(3))
-
-    __table_args__ = (
-        _currency_check("fx_long_currency"),
-        _currency_check("fx_short_currency"),
-    )
-
-
-class ExecutedFxOrder(Timestamped, Base):
-    __tablename__ = "executed_fx_orders"
-
-    fx_order_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_account_id: Mapped[str] = mapped_column(String(100))
-    from_fx_pair_id: Mapped[str] = mapped_column(
-        String(16), ForeignKey("canonical_fx.fx_pair_id"), index=True
-    )
-    action: Mapped[OrderAction] = mapped_column(_enum(OrderAction, "action"))
-    order_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    from_account_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    currency: Mapped[str] = mapped_column(CHAR(3), primary_key=True)
+    balance: Mapped[Decimal] = mapped_column(Amount)
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["from_account_id", "from_broker_id"],
             ["accounts.account_id", "accounts.from_broker_id"],
-        ),
-        Index("ix_executed_fx_orders_account", "from_account_id", "from_broker_id"),
-    )
-
-
-class ExecutedFx(Timestamped, Base):
-    __tablename__ = "executed_fx"
-
-    fx_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_fx_order_id: Mapped[str] = mapped_column(String(100))
-    fx_amount: Mapped[Decimal] = mapped_column(Amount)
-    fx_quantity: Mapped[Decimal] = mapped_column(Amount)
-    fx_price: Mapped[Decimal] = mapped_column(Amount)
-    fx_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["from_fx_order_id", "from_broker_id"],
-            ["executed_fx_orders.fx_order_id", "executed_fx_orders.from_broker_id"],
-        ),
-        Index("ix_executed_fx_order", "from_fx_order_id", "from_broker_id"),
-        CheckConstraint("fx_amount >= 0", name="fx_amount_non_negative"),
-        CheckConstraint("fx_quantity > 0", name="fx_quantity_positive"),
-        CheckConstraint("fx_price >= 0", name="fx_price_non_negative"),
-    )
-
-
-class FxFee(Timestamped, Base):
-    __tablename__ = "fx_fees"
-
-    from_fx_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    from_broker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    fx_fee_type: Mapped[FeeType] = mapped_column(
-        _enum(FeeType, "fx_fee_type"), primary_key=True
-    )
-    fx_fee_amount: Mapped[Decimal] = mapped_column(Amount)
-    fx_fee_currency: Mapped[str] = mapped_column(CHAR(3))
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["from_fx_id", "from_broker_id"],
-            ["executed_fx.fx_id", "executed_fx.from_broker_id"],
-        ),
-        CheckConstraint("fx_fee_amount > 0", name="fx_fee_amount_positive"),
-        _currency_check("fx_fee_currency"),
-    )
-
-
-class SyncJob(Timestamped, Base):
-    """One backfill/refresh of a user's ledger from a broker."""
-
-    __tablename__ = "sync_jobs"
-
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4
-    )
-    from_user_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("users.user_id"), index=True
-    )
-    from_broker_id: Mapped[str] = mapped_column(
-        String(100), ForeignKey("brokers.broker_id")
-    )
-    kind: Mapped[SyncKind] = mapped_column(_enum(SyncKind, "kind"))
-    status: Mapped[SyncStatus] = mapped_column(
-        _enum(SyncStatus, "status"), default=SyncStatus.PENDING
-    )
-    start_date: Mapped[date] = mapped_column(Date)
-    end_date: Mapped[date] = mapped_column(Date)
-    inserted: Mapped[dict[str, int] | None] = mapped_column(JSONB)
-    skipped: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
-    error: Mapped[str | None] = mapped_column(Text)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["from_user_id", "from_broker_id"],
-            ["broker_connections.from_user_id", "broker_connections.from_broker_id"],
+            ondelete="CASCADE",
         ),
         Index(
-            "uq_sync_jobs_active_connection",
-            "from_user_id",
+            "ix_cash_snapshots_account_date",
+            "from_account_id",
             "from_broker_id",
-            unique=True,
-            postgresql_where=text("status IN ('PENDING', 'RUNNING')"),
+            "snapshot_date",
         ),
-        CheckConstraint("start_date <= end_date", name="date_range"),
+        _currency_check("currency"),
     )

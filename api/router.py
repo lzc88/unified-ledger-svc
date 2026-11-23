@@ -7,7 +7,6 @@ from api.routes import (
     cpf,
     forecast,
     integrations,
-    ledger,
     networth,
     portfolio,
     tax,
@@ -20,7 +19,6 @@ api_router.include_router(config.router)
 api_router.include_router(cpf.router)
 api_router.include_router(forecast.router)
 api_router.include_router(integrations.router)
-api_router.include_router(ledger.router)
 api_router.include_router(networth.router)
 api_router.include_router(portfolio.router)
 api_router.include_router(tax.router)

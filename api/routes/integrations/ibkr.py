@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from api.deps import CurrentUser, SessionFactory, get_ibkr_adapter
-from api.routes.integrations.sync import SyncConflictError, sync_router
+from api.routes.integrations.sync import SyncConflictError
 from api.schemas.connection import IbkrConnection, IbkrConnectionUpdate
 from integrations.base import BrokerAdapter
 from integrations.ibkr.connection import (
@@ -12,10 +12,9 @@ from integrations.ibkr.connection import (
     disconnect,
     save_connection,
 )
-from integrations.sync import ActiveJobError
+from integrations.sync import ActiveSyncError
 
 router = APIRouter(prefix="/ibkr", tags=["ibkr"])
-router.include_router(sync_router(get_ibkr_adapter))
 
 Broker = Annotated[BrokerAdapter, Depends(get_ibkr_adapter)]
 
@@ -59,7 +58,7 @@ def delete_ibkr_connection(
     try:
         with session_factory.begin() as session:
             disconnect(session, broker.broker_id, user.user_id)
-    except ActiveJobError as exc:
-        raise SyncConflictError("job_active", str(exc)) from exc
+    except ActiveSyncError as exc:
+        raise SyncConflictError("sync_active", str(exc)) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

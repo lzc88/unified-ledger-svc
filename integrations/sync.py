@@ -1,29 +1,21 @@
 import logging
-import uuid
 from collections.abc import Callable
-from dataclasses import asdict
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import delete, exists, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, or_, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from config.config import OPENFIGI_API_KEY_KEY, SYNC_REFRESH_OVERLAP_DAYS
-from database.models import (
-    ACTIVE_SYNC_STATUSES,
-    Account,
-    ExecutedCash,
-    ExecutedFx,
-    ExecutedFxOrder,
-    ExecutedTrade,
-    ExecutedTradeOrder,
-    FxFee,
-    SyncJob,
-    SyncKind,
-    SyncStatus,
-    TradeFee,
+from config.config import (
+    OPENFIGI_API_KEY_KEY,
+    SNAPSHOT_TIMEZONE,
+    SYNC_INTERNAL_ERROR,
+    SYNC_INTERRUPTED_ERROR,
+    SYNC_STALE_AFTER,
+    SYNC_STALE_ERROR,
 )
+from database.models import Account, BrokerConnection, SyncStatus
 from user_config.service import ConfigUnreadableError, read_config
 
 from .base import BrokerAdapter, FormatError, IntegrationError
@@ -33,247 +25,199 @@ from .connections import (
     get_connection,
     load_credentials,
 )
-from .load import known_broker_assets, load
+from .load import known_broker_assets, store_snapshot
 from .openfigi import OpenFigiClient, assign_figis
 
 log = logging.getLogger(__name__)
 
+FigiFactory = Callable[[str | None], OpenFigiClient]
 
-class ActiveJobError(Exception):
+
+class ActiveSyncError(Exception):
     pass
 
 
-class NoActivityError(Exception):
-    pass
+@dataclass(frozen=True)
+class SyncSummary:
+    broker_id: str
+    status: SyncStatus | None
+    last_synced_at: datetime | None
+    error: str | None
 
 
-def refresh_range(
-    session: Session, broker: BrokerAdapter, user_id: str, today: date
-) -> tuple[date, date]:
-    broker_id = broker.broker_id
-    user_accounts = select(Account.account_id).where(
-        Account.from_user_id == user_id, Account.from_broker_id == broker_id
+def is_stale(connection: BrokerConnection) -> bool:
+    started = connection.last_sync_started_at
+    return (
+        connection.last_sync_status == SyncStatus.RUNNING
+        and started is not None
+        and datetime.now(UTC) - started > SYNC_STALE_AFTER
     )
-    latest_cash = select(func.max(ExecutedCash.tx_datetime)).where(
-        ExecutedCash.from_broker_id == broker_id,
-        ExecutedCash.from_account_id.in_(user_accounts),
-    )
-    latest_trade = (
-        select(func.max(ExecutedTrade.trade_datetime))
-        .join(
-            ExecutedTradeOrder,
-            (ExecutedTradeOrder.trade_order_id == ExecutedTrade.from_trade_order_id)
-            & (ExecutedTradeOrder.from_broker_id == ExecutedTrade.from_broker_id),
+
+
+def sync_summary(connection: BrokerConnection | None, broker_id: str) -> SyncSummary:
+    if connection is None:
+        return SyncSummary(broker_id, None, None, None)
+
+    if is_stale(connection):
+        return SyncSummary(
+            broker_id, SyncStatus.FAILED, connection.last_synced_at, SYNC_STALE_ERROR
         )
+
+    return SyncSummary(
+        broker_id=broker_id,
+        status=connection.last_sync_status,
+        last_synced_at=connection.last_synced_at,
+        error=connection.last_sync_error,
+    )
+
+
+def snapshot_today() -> date:
+    return datetime.now(SNAPSHOT_TIMEZONE).date()
+
+
+def start_sync(
+    session: Session, broker: BrokerAdapter, user_id: str
+) -> BrokerConnection:
+    connection = session.scalars(
+        update(BrokerConnection)
         .where(
-            ExecutedTradeOrder.from_broker_id == broker_id,
-            ExecutedTradeOrder.from_account_id.in_(user_accounts),
+            BrokerConnection.from_user_id == user_id,
+            BrokerConnection.from_broker_id == broker.broker_id,
+            or_(
+                BrokerConnection.last_sync_status.is_(None),
+                BrokerConnection.last_sync_status != SyncStatus.RUNNING,
+                BrokerConnection.last_sync_started_at.is_(None),
+                BrokerConnection.last_sync_started_at < func.now() - SYNC_STALE_AFTER,
+            ),
         )
-    )
-    latest_fx = (
-        select(func.max(ExecutedFx.fx_datetime))
-        .join(
-            ExecutedFxOrder,
-            (ExecutedFxOrder.fx_order_id == ExecutedFx.from_fx_order_id)
-            & (ExecutedFxOrder.from_broker_id == ExecutedFx.from_broker_id),
+        .values(
+            last_sync_status=SyncStatus.RUNNING,
+            last_sync_error=None,
+            last_sync_started_at=func.now(),
+            updated_at=BrokerConnection.updated_at,
         )
-        .where(
-            ExecutedFxOrder.from_broker_id == broker_id,
-            ExecutedFxOrder.from_account_id.in_(user_accounts),
-        )
-    )
-    latest = [
-        ts for ts in map(session.scalar, (latest_cash, latest_trade, latest_fx)) if ts
-    ]
-    if not latest:
-        raise NoActivityError(
-            f"no {broker_id} ledger activity for user {user_id!r}; run a backfill first"
-        )
-    end = today - timedelta(days=1)
-    latest_date = max(latest).astimezone(broker.timezone).date()
-    return min(latest_date - timedelta(days=SYNC_REFRESH_OVERLAP_DAYS), end), end
+        .returning(BrokerConnection)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
 
+    if connection is not None:
+        return connection
 
-def create_job(
-    session: Session,
-    broker: BrokerAdapter,
-    user_id: str,
-    kind: SyncKind,
-    start: date,
-    end: date,
-) -> SyncJob:
     if get_connection(session, broker.broker_id, user_id) is None:
         raise NotConnectedError(
             f"{broker.broker_id} is not connected: add it under my investments"
         )
-
-    job = SyncJob(
-        from_user_id=user_id,
-        from_broker_id=broker.broker_id,
-        kind=kind,
-        status=SyncStatus.PENDING,
-        start_date=start,
-        end_date=end,
-    )
-    try:
-        with session.begin_nested():
-            session.add(job)
-    except IntegrityError as exc:
-        if (
-            getattr(exc.orig.diag, "constraint_name", None)
-            == "uq_sync_jobs_active_connection"
-        ):
-            raise ActiveJobError(
-                f"an {broker.broker_id} sync job is already in progress"
-            ) from exc
-        raise
-    return job
+    raise ActiveSyncError(f"an {broker.broker_id} sync is already in progress")
 
 
-def run_job(
+def run_sync(
     session_factory: sessionmaker[Session],
     broker: BrokerAdapter,
-    figi_factory: Callable[[str | None], OpenFigiClient],
-    job_id: uuid.UUID,
+    figi_factory: FigiFactory,
+    user_id: str,
+    today: date,
 ) -> None:
-    with session_factory.begin() as session:
-        job = session.get_one(SyncJob, job_id)
-        job.status = SyncStatus.RUNNING
-        job.started_at = func.now()
-        user_id, start, end = job.from_user_id, job.start_date, job.end_date
-
-    outcome: dict[str, Any] = {"status": SyncStatus.FAILED}
     try:
         with session_factory() as session:
             credentials = load_credentials(session, broker, user_id)
             openfigi_key = read_config(session, user_id, OPENFIGI_API_KEY_KEY)
 
-        result = broker.map(broker.fetch(start, end, credentials))
+        snapshot = broker.fetch_snapshot(credentials)
+
         with session_factory() as session:
-            known = known_broker_assets(session, broker.broker_id, result.assets)
-        assign_figis(result, known, figi_factory(openfigi_key))
+            known = known_broker_assets(session, broker.broker_id, snapshot.assets)
+        assign_figis(snapshot, known, figi_factory(openfigi_key))
+
         with session_factory.begin() as session:
-            inserted = load(session, broker, result, user_id)
-        outcome = {
-            "status": SyncStatus.SUCCEEDED,
-            "inserted": inserted,
-            "skipped": [asdict(row) for row in result.skipped],
-        }
+            stored = store_snapshot(session, broker, snapshot, user_id, today)
+            _finish(session, broker.broker_id, user_id, SyncStatus.SUCCEEDED, None)
+
+        log.info(
+            "%s sync for %s stored %s, skipped %d row(s)",
+            broker.broker_id,
+            user_id,
+            stored,
+            len(snapshot.skipped),
+        )
+        return
     except (
         NotConnectedError,
         CredentialsUnreadableError,
         ConfigUnreadableError,
         IntegrationError,
         FormatError,
-        ValueError,
     ) as exc:
-        outcome["error"] = str(exc)
+        error = str(exc)
     except Exception:
-        log.exception("sync job %s failed", job_id)
-        outcome["error"] = "internal error; see server logs"
+        log.exception("%s sync for %s failed", broker.broker_id, user_id)
+        error = SYNC_INTERNAL_ERROR
 
-    with session_factory.begin() as session:
-        session.execute(
-            update(SyncJob)
-            .where(SyncJob.job_id == job_id)
-            .values(**outcome, finished_at=func.now())
+    try:
+        with session_factory.begin() as session:
+            _finish(session, broker.broker_id, user_id, SyncStatus.FAILED, error)
+    except Exception:
+        log.exception(
+            "could not record the failed %s sync for %s", broker.broker_id, user_id
         )
 
 
-def fail_interrupted_jobs(session: Session) -> int:
+def fail_interrupted_syncs(session: Session) -> int:
     result = session.execute(
-        update(SyncJob)
-        .where(SyncJob.status.in_(ACTIVE_SYNC_STATUSES))
+        update(BrokerConnection)
+        .where(BrokerConnection.last_sync_status == SyncStatus.RUNNING)
         .values(
-            status=SyncStatus.FAILED,
-            error="interrupted by server restart",
-            finished_at=func.now(),
+            last_sync_status=SyncStatus.FAILED,
+            last_sync_error=SYNC_INTERRUPTED_ERROR,
+            updated_at=BrokerConnection.updated_at,
         )
+        .execution_options(synchronize_session=False)
     )
     return result.rowcount
 
 
-def has_active_job(session: Session, broker_id: str, user_id: str) -> bool:
-    return bool(
-        session.scalar(
-            select(
-                exists().where(
-                    SyncJob.from_broker_id == broker_id,
-                    SyncJob.from_user_id == user_id,
-                    SyncJob.status.in_(ACTIVE_SYNC_STATUSES),
-                )
-            )
-        )
+def ensure_idle(
+    session: Session, broker_id: str, user_id: str, *, lock: bool = True
+) -> None:
+    connection = session.get(
+        BrokerConnection, (user_id, broker_id), with_for_update=lock or None
     )
+    if (
+        connection is not None
+        and connection.last_sync_status == SyncStatus.RUNNING
+        and not is_stale(connection)
+    ):
+        raise ActiveSyncError("a sync is running")
 
 
 def purge_history(session: Session, broker_id: str, user_id: str) -> None:
-    accounts = select(Account.account_id).where(
-        Account.from_user_id == user_id, Account.from_broker_id == broker_id
+    session.execute(
+        delete(Account)
+        .where(Account.from_broker_id == broker_id, Account.from_user_id == user_id)
+        .execution_options(synchronize_session=False)
     )
 
-    trade_orders = select(ExecutedTradeOrder.trade_order_id).where(
-        ExecutedTradeOrder.from_broker_id == broker_id,
-        ExecutedTradeOrder.from_account_id.in_(accounts),
-    )
-    trades = select(ExecutedTrade.trade_id).where(
-        ExecutedTrade.from_broker_id == broker_id,
-        ExecutedTrade.from_trade_order_id.in_(trade_orders),
-    )
 
-    fx_orders = select(ExecutedFxOrder.fx_order_id).where(
-        ExecutedFxOrder.from_broker_id == broker_id,
-        ExecutedFxOrder.from_account_id.in_(accounts),
-    )
-    fx = select(ExecutedFx.fx_id).where(
-        ExecutedFx.from_broker_id == broker_id,
-        ExecutedFx.from_fx_order_id.in_(fx_orders),
-    )
+def _finish(
+    session: Session,
+    broker_id: str,
+    user_id: str,
+    status: SyncStatus,
+    error: str | None,
+) -> None:
+    values: dict[str, Any] = {
+        "last_sync_status": status,
+        "last_sync_error": error,
+        "updated_at": BrokerConnection.updated_at,
+    }
+    if status is SyncStatus.SUCCEEDED:
+        values["last_synced_at"] = func.now()
 
-    statements = (
-        delete(TradeFee).where(
-            TradeFee.from_broker_id == broker_id, TradeFee.from_trade_id.in_(trades)
-        ),
-        delete(ExecutedTrade).where(
-            ExecutedTrade.from_broker_id == broker_id,
-            ExecutedTrade.from_trade_order_id.in_(trade_orders),
-        ),
-        delete(ExecutedTradeOrder).where(
-            ExecutedTradeOrder.from_broker_id == broker_id,
-            ExecutedTradeOrder.from_account_id.in_(accounts),
-        ),
-        delete(FxFee).where(FxFee.from_broker_id == broker_id, FxFee.from_fx_id.in_(fx)),
-        delete(ExecutedFx).where(
-            ExecutedFx.from_broker_id == broker_id,
-            ExecutedFx.from_fx_order_id.in_(fx_orders),
-        ),
-        delete(ExecutedFxOrder).where(
-            ExecutedFxOrder.from_broker_id == broker_id,
-            ExecutedFxOrder.from_account_id.in_(accounts),
-        ),
-        delete(ExecutedCash).where(
-            ExecutedCash.from_broker_id == broker_id,
-            ExecutedCash.from_account_id.in_(accounts),
-        ),
-        delete(SyncJob).where(
-            SyncJob.from_broker_id == broker_id, SyncJob.from_user_id == user_id
-        ),
-        delete(Account).where(
-            Account.from_broker_id == broker_id, Account.from_user_id == user_id
-        ),
-    )
-    for statement in statements:
-        session.execute(statement.execution_options(synchronize_session=False))
-
-
-def latest_jobs(
-    session: Session, broker_id: str, user_id: str, limit: int
-) -> list[SyncJob]:
-    return list(
-        session.scalars(
-            select(SyncJob)
-            .where(SyncJob.from_broker_id == broker_id, SyncJob.from_user_id == user_id)
-            .order_by(SyncJob.created_at.desc())
-            .limit(limit)
+    session.execute(
+        update(BrokerConnection)
+        .where(
+            BrokerConnection.from_user_id == user_id,
+            BrokerConnection.from_broker_id == broker_id,
         )
+        .values(**values)
+        .execution_options(synchronize_session=False)
     )

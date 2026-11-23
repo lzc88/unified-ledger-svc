@@ -17,7 +17,7 @@ from config.config import (
     OPENFIGI_MAX_ATTEMPTS,
     OPENFIGI_RATE_LIMIT_BACKOFF,
 )
-from integrations.base import AssetIdentity, IntegrationError, MappingResult, Row
+from integrations.base import AssetIdentity, IntegrationError, Row, Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class OpenFigiClient:
 
 
 def assign_figis(
-    result: MappingResult, known: Collection[str], client: OpenFigiClient
+    result: Snapshot, known: Collection[str], client: OpenFigiClient
 ) -> None:
     unknown = {
         broker_asset_id: identity

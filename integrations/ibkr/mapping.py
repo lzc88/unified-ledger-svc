@@ -1,20 +1,19 @@
-import re
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterable
-from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from config.config import (
-    IBKR_FLEX_DATE_FORMATS,
-    IBKR_FLEX_TIME_FORMATS,
-    IBKR_FLEX_TIMEZONE,
     IBKR_LISTING_EXCHANGE_TO_EXCH_CODES,
     IBKR_SUB_CATEGORY_TO_LISTING_CATEGORY,
 )
-from database.models import CashAction, FeeType, ListingCategory, OrderAction
-from integrations.base import AssetIdentity, FormatError, MappingResult, Row, SkippedRow
+from database.models import ListingCategory
+from integrations.base import AssetIdentity, FormatError, SkippedRow, Snapshot
 
-FX_PAIR_PATTERN = re.compile(r"^([A-Z]{3})\.([A-Z]{3})$")
+POSITIONS_SECTION = "OpenPositions"
+CASH_SECTION = "CashReport"
+
+TRACKED_ASSET_CATEGORY = "STK"
+POSITION_LEVEL_OF_DETAIL = "SUMMARY"
+BASE_SUMMARY_CURRENCY = "BASE_SUMMARY"
 
 
 class FlexFormatError(FormatError):
@@ -25,303 +24,167 @@ class _Skip(Exception):
     pass
 
 
-Mapper = Callable[[MappingResult, dict[str, str], str], None]
-
-
-def map_statements(documents: Iterable[bytes]) -> MappingResult:
-
-    result = MappingResult()
-    skipped_ids: set[str] = set()
-
-    for document in documents:
-
-        try:
-            root = ET.fromstring(document)
-        except ET.ParseError as exc:
-            raise FlexFormatError(f"Flex statement is not valid XML: {exc}") from None
-
-        if root.tag != "FlexQueryResponse":
-            raise FlexFormatError(f"Expected FlexQueryResponse, got <{root.tag}>")
-
-        for statement in root.iter("FlexStatement"):
-
-            account_id = _require(statement.attrib, "accountId", "FlexStatement")
-            result.accounts.setdefault(account_id, {"account_id": account_id})
-            info = statement.find("AccountInformation")
-
-            if info is not None and info.get("name", "").strip():
-                result.account_names[account_id] = info.get("name", "").strip()
-
-            for element in statement.findall("Trades/Trade"):
-                if element.get("levelOfDetail", "EXECUTION") == "EXECUTION":
-                    _apply(
-                        result, skipped_ids, "Trades", element, account_id, _map_trade
-                    )
-
-            for element in statement.findall("CashTransactions/CashTransaction"):
-                if element.get("levelOfDetail", "DETAIL") == "DETAIL":
-                    _apply(
-                        result,
-                        skipped_ids,
-                        "CashTransactions",
-                        element,
-                        account_id,
-                        _map_cash_transaction,
-                    )
-
-    return result
-
-
-def _apply(
-    result: MappingResult,
-    skipped_ids: set[str],
-    section: str,
-    element: ET.Element,
-    account_id: str,
-    mapper: Mapper,
-) -> None:
-
-    attrs = dict(element.attrib)
+def map_snapshot(document: bytes) -> Snapshot:
 
     try:
-        mapper(result, attrs, account_id)
-    except _Skip as skip:
-        txn_id = attrs.get("transactionID") or attrs.get("tradeID")
-        if txn_id is not None and txn_id in skipped_ids:
-            return
-        result.skipped.append(SkippedRow(section, txn_id, str(skip), attrs))
-        if txn_id is not None:
-            skipped_ids.add(txn_id)
+        root = ET.fromstring(document)
+    except ET.ParseError as exc:
+        raise FlexFormatError(f"Flex statement is not valid XML: {exc}") from None
+
+    if root.tag != "FlexQueryResponse":
+        raise FlexFormatError(f"Expected FlexQueryResponse, got <{root.tag}>")
+
+    snapshot = Snapshot()
+
+    for statement in root.iter("FlexStatement"):
+        _map_statement(snapshot, statement)
+
+    return snapshot
 
 
-def _map_trade(result: MappingResult, attrs: dict[str, str], account_id: str) -> None:
+def _map_statement(snapshot: Snapshot, statement: ET.Element) -> None:
 
-    section = "Trades"
-    trade_id = _require(attrs, "tradeID", section)
+    account_id = _require(statement.attrib, "accountId", "FlexStatement")
+    snapshot.accounts.setdefault(account_id, {"account_id": account_id})
 
-    if trade_id in result.trades or trade_id in result.fx:
-        return
+    info = statement.find("AccountInformation")
+    if info is not None and info.get("name", "").strip():
+        snapshot.account_names[account_id] = info.get("name", "").strip()
 
-    category = _require(attrs, "assetCategory", section)
+    positions = _section(statement, POSITIONS_SECTION, "Open Positions")
+    rows = positions.findall("OpenPosition")
+    summaries = [
+        element
+        for element in rows
+        if element.get("levelOfDetail", POSITION_LEVEL_OF_DETAIL) == POSITION_LEVEL_OF_DETAIL
+    ]
+    if rows and not summaries:
+        raise FlexFormatError(
+            "Open Positions has no SUMMARY rows; set its level of detail to "
+            "Summary in the Flex Query"
+        )
 
-    if category == "CASH":
-        _map_fx(result, attrs, account_id, trade_id)
+    for element in summaries:
 
-    elif category == "STK":
-        _map_stock(result, attrs, account_id, trade_id)
+        attrs = dict(element.attrib)
+        try:
+            _map_position(snapshot, attrs, account_id)
+        except _Skip as skip:
+            snapshot.skipped.append(
+                SkippedRow(POSITIONS_SECTION, attrs.get("conid"), str(skip), attrs)
+            )
 
-    else:
-        raise _Skip(f"asset category {category!r} is not tracked")
+    cash = _section(statement, CASH_SECTION, "Cash Report")
+    for element in cash.findall("CashReportCurrency"):
+        _map_cash(snapshot, dict(element.attrib), account_id)
 
 
-def _map_stock(
-    result: MappingResult, attrs: dict[str, str], account_id: str, trade_id: str
-) -> None:
+def _section(statement: ET.Element, tag: str, label: str) -> ET.Element:
 
-    section = "Trades"
+    section = statement.find(tag)
+
+    if section is None:
+        raise FlexFormatError(
+            f"Flex statement has no {tag} section; add {label} to the Flex Query"
+        )
+
+    return section
+
+
+def _map_position(snapshot: Snapshot, attrs: dict[str, str], account_id: str) -> None:
+
+    section = POSITIONS_SECTION
+    asset_category = _require(attrs, "assetCategory", section)
+
+    if asset_category != TRACKED_ASSET_CATEGORY:
+        raise _Skip(f"asset category {asset_category!r} is not tracked")
+
     category = _listing_category(attrs)
-    quantity, action, order_id = _execution(attrs)
-    fees = _fees(attrs)
+
+    quantity = _decimal(attrs, "position", section)
+    if quantity == 0:
+        raise _Skip("zero quantity")
 
     conid = _require(attrs, "conid", section)
-    listing_exchange = _optional(attrs, "listingExchange", section)
     currency = _require(attrs, "currency", section)
-    result.assets.setdefault(
+    symbol = _require(attrs, "symbol", section)
+    listing_exchange = _require(attrs, "listingExchange", section)
+    cost_basis = _decimal(attrs, "costBasisMoney", section)
+
+    snapshot.assets.setdefault(
         conid, {"listing_category": category, "listing_currency": currency}
     )
 
-    result.identities.setdefault(
+    snapshot.identities.setdefault(
         conid,
         AssetIdentity(
-            symbol=_require(attrs, "symbol", section),
+            symbol=symbol,
             currency=currency,
             exch_codes=IBKR_LISTING_EXCHANGE_TO_EXCH_CODES.get(
-                listing_exchange or "", frozenset()
+                listing_exchange, frozenset()
             ),
             isin=attrs.get("isin", "").strip() or None,
         ),
     )
 
-    result.trade_orders.setdefault(
-        order_id,
+    snapshot.positions.setdefault(
+        (account_id, conid),
         {
-            "trade_order_id": order_id,
             "from_account_id": account_id,
             "from_broker_asset_id": conid,
-            "action": action,
-            "order_datetime": _datetime(attrs, "orderTime", section),
+            "quantity": quantity,
+            "cost_basis": cost_basis,
+            "currency": currency,
         },
     )
-    result.trades[trade_id] = {
-        "trade_id": trade_id,
-        "from_trade_order_id": order_id,
-        "trade_amount": abs(_decimal(attrs, "proceeds", section)),
-        "trade_quantity": abs(quantity),
-        "trade_price": _decimal(attrs, "tradePrice", section),
-        "trade_currency": currency,
-        "trade_datetime": _datetime(attrs, "dateTime", section),
-    }
-    for fee_type, (amount, fee_currency) in fees.items():
-        result.trade_fees[(trade_id, fee_type)] = {
-            "from_trade_id": trade_id,
-            "trade_fee_type": fee_type,
-            "trade_fee_amount": amount,
-            "trade_fee_currency": fee_currency,
-        }
 
 
-def _map_fx(
-    result: MappingResult, attrs: dict[str, str], account_id: str, trade_id: str
-) -> None:
-    section = "Trades"
-    symbol = _require(attrs, "symbol", section)
-    pair = FX_PAIR_PATTERN.match(symbol)
-    if pair is None:
-        raise _Skip(f"FX symbol {symbol!r} is not of the form BASE.QUOTE")
-    quantity, action, order_id = _execution(attrs)
-    fees = _fees(attrs)
+def _map_cash(snapshot: Snapshot, attrs: dict[str, str], account_id: str) -> None:
 
-    result.fx_pairs.setdefault(
-        symbol,
-        {
-            "fx_pair_id": symbol,
-            "fx_long_currency": pair[1],
-            "fx_short_currency": pair[2],
-        },
+    section = CASH_SECTION
+    currency = _require(attrs, "currency", section)
+
+    if currency == BASE_SUMMARY_CURRENCY:
+        return
+
+    balance = _decimal(attrs, "endingCash", section)
+    if balance == 0:
+        return
+
+    snapshot.cash.setdefault(
+        (account_id, currency),
+        {"from_account_id": account_id, "currency": currency, "balance": balance},
     )
-    result.fx_orders.setdefault(
-        order_id,
-        {
-            "fx_order_id": order_id,
-            "from_account_id": account_id,
-            "from_fx_pair_id": symbol,
-            "action": action,
-            "order_datetime": _datetime(attrs, "orderTime", section),
-        },
-    )
-    result.fx[trade_id] = {
-        "fx_id": trade_id,
-        "from_fx_order_id": order_id,
-        "fx_amount": abs(_decimal(attrs, "proceeds", section)),
-        "fx_quantity": abs(quantity),
-        "fx_price": _decimal(attrs, "tradePrice", section),
-        "fx_datetime": _datetime(attrs, "dateTime", section),
-    }
-    for fee_type, (amount, fee_currency) in fees.items():
-        result.fx_fees[(trade_id, fee_type)] = {
-            "from_fx_id": trade_id,
-            "fx_fee_type": fee_type,
-            "fx_fee_amount": amount,
-            "fx_fee_currency": fee_currency,
-        }
 
 
 def _listing_category(attrs: dict[str, str]) -> ListingCategory:
-    sub_category = _require(attrs, "subCategory", "Trades")
+
+    sub_category = _require(attrs, "subCategory", POSITIONS_SECTION)
     category = IBKR_SUB_CATEGORY_TO_LISTING_CATEGORY.get(sub_category)
+
     if category is None:
         raise _Skip(f"sub category {sub_category!r} is not tracked")
+
     return ListingCategory(category)
 
 
-def _execution(attrs: dict[str, str]) -> tuple[Decimal, OrderAction, str]:
-    quantity = _decimal(attrs, "quantity", "Trades")
-    if quantity == 0:
-        raise _Skip("zero quantity")
-    action = _order_action(attrs)
-    order_id = _require(attrs, "ibOrderID", "Trades")
-    if not order_id or order_id == "0":
-        raise _Skip("no ibOrderID")
-    return quantity, action, order_id
-
-
-def _order_action(attrs: dict[str, str]) -> OrderAction:
-    buy_sell = _require(attrs, "buySell", "Trades")
-    try:
-        return OrderAction(buy_sell)
-    except ValueError:
-        raise _Skip(f"buySell {buy_sell!r} is not BUY/SELL") from None
-
-
-def _fees(attrs: dict[str, str]) -> dict[FeeType, tuple[Decimal, str]]:
-    currency = _require(attrs, "ibCommissionCurrency", "Trades")
-    fees = {}
-    for fee_type, name in (
-        (FeeType.COMMISSION, "ibCommission"),
-        (FeeType.TAX, "taxes"),
-    ):
-        amount = _decimal(attrs, name, "Trades")
-        if amount > 0:
-            raise _Skip(f"positive {name} {amount} (rebate) is not supported")
-        if amount < 0:
-            fees[fee_type] = (-amount, currency)
-    return fees
-
-
-def _map_cash_transaction(
-    result: MappingResult, attrs: dict[str, str], account_id: str
-) -> None:
-    section = "CashTransactions"
-    kind = _require(attrs, "type", section)
-    if kind != "Deposits/Withdrawals":
-        raise _Skip(f"cash transaction type {kind!r} is not tracked")
-    tx_id = _require(attrs, "transactionID", section)
-    if tx_id in result.cash:
-        return
-    amount = _decimal(attrs, "amount", section)
-    if amount == 0:
-        raise _Skip("zero amount")
-    result.cash[tx_id] = {
-        "cash_id": tx_id,
-        "from_account_id": account_id,
-        "tx_datetime": _datetime(attrs, "dateTime", section),
-        "action": CashAction.DEPOSIT if amount > 0 else CashAction.WITHDRAW,
-        "tx_amount": abs(amount),
-        "tx_currency": _require(attrs, "currency", section),
-    }
-
-
 def _require(attrs: dict[str, str], name: str, section: str) -> str:
+
     value = attrs.get(name)
+
     if value is None:
         raise FlexFormatError(
             f"{section} rows have no {name!r} field; add it to the Flex Query"
         )
+
     return value.strip()
 
 
-def _optional(attrs: dict[str, str], name: str, section: str) -> str | None:
-    return _require(attrs, name, section) or None
-
-
 def _decimal(attrs: dict[str, str], name: str, section: str) -> Decimal:
+
     raw = _require(attrs, name, section)
+
     try:
         return Decimal(raw.replace(",", ""))
     except InvalidOperation:
         raise FlexFormatError(f"{section} {name}={raw!r} is not a number") from None
-
-
-def _datetime(attrs: dict[str, str], name: str, section: str) -> datetime:
-    raw = _require(attrs, name, section)
-    normalized = raw
-    for separator in (",", " ", "T"):
-        normalized = normalized.replace(separator, ";")
-    day_part, _, time_part = normalized.partition(";")
-    day = _parse(day_part, IBKR_FLEX_DATE_FORMATS)
-    clock = _parse(time_part, IBKR_FLEX_TIME_FORMATS) if time_part else datetime.min
-    if day is None or clock is None:
-        raise FlexFormatError(
-            f"{section} {name}={raw!r}: set the Flex Query date format to yyyyMMdd "
-            "and time format to HHmmss or HH:mm:ss"
-        )
-    return datetime.combine(day.date(), clock.time(), tzinfo=IBKR_FLEX_TIMEZONE)
-
-
-def _parse(value: str, formats: tuple[str, ...]) -> datetime | None:
-    for fmt in formats:
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None

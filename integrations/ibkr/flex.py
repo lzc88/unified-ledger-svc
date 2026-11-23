@@ -1,7 +1,6 @@
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from datetime import date, timedelta
 from urllib.parse import urlsplit
 
 import httpx2
@@ -10,7 +9,6 @@ from config.config import (
     IBKR_FLEX_API_VERSION,
     IBKR_FLEX_HTTP_TIMEOUT_SECONDS,
     IBKR_FLEX_MAX_ATTEMPTS,
-    IBKR_FLEX_MAX_WINDOW_DAYS,
     IBKR_FLEX_MIN_REQUEST_INTERVAL,
     IBKR_FLEX_POLL_INTERVAL,
     IBKR_FLEX_RATE_LIMIT_BACKOFF,
@@ -27,25 +25,6 @@ class FlexError(IntegrationError):
     def __init__(self, code: str | None, message: str) -> None:
         super().__init__(f"IBKR Flex error {code}: {message}" if code else message)
         self.code = code
-
-
-def date_windows(start: date, end: date) -> list[tuple[date, date]]:
-
-    if start > end:
-        raise ValueError(f"start {start} is after end {end}")
-
-    windows = []
-    for year in range(start.year, end.year + 1):
-        window_start = max(start, date(year, 1, 1))
-        year_end = min(end, date(year, 12, 31))
-        while window_start <= year_end:
-            window_end = min(
-                window_start + timedelta(days=IBKR_FLEX_MAX_WINDOW_DAYS - 1), year_end
-            )
-            windows.append((window_start, window_end))
-            window_start = window_end + timedelta(days=1)
-
-    return windows
 
 
 class FlexClient:
@@ -65,27 +44,17 @@ class FlexClient:
         self._sleep = sleep
         self._last_request: float | None = None
 
-    def fetch_range(self, start: date, end: date) -> list[bytes]:
-        return [self.fetch(fd, td) for fd, td in date_windows(start, end)]
+    def fetch(self) -> bytes:
 
-    def fetch(self, start: date, end: date) -> bytes:
-
-        if (end - start).days + 1 > IBKR_FLEX_MAX_WINDOW_DAYS:
-            raise ValueError(
-                f"Flex requests cover at most {IBKR_FLEX_MAX_WINDOW_DAYS} days"
-            )
-
-        reference_code, statement_url = self._send_request(start, end)
+        reference_code, statement_url = self._send_request()
 
         return self._get_statement(reference_code, statement_url)
 
-    def _send_request(self, start: date, end: date) -> tuple[str, str]:
+    def _send_request(self) -> tuple[str, str]:
 
         params = {
             "t": self._token,
             "q": self._query_id,
-            "fd": start.strftime("%Y%m%d"),
-            "td": end.strftime("%Y%m%d"),
             "v": IBKR_FLEX_API_VERSION,
         }
 
@@ -178,12 +147,12 @@ class FlexClient:
         self._last_request = time.monotonic()
 
 
-def fetch_documents(token: str, query_id: str, start: date, end: date) -> list[bytes]:
+def fetch_document(token: str, query_id: str) -> bytes:
 
     with httpx2.Client(timeout=IBKR_FLEX_HTTP_TIMEOUT_SECONDS) as http:
         client = FlexClient(token, query_id, http=http)
 
-        return client.fetch_range(start, end)
+        return client.fetch()
 
 
 def _check_ibkr_url(url: str) -> None:

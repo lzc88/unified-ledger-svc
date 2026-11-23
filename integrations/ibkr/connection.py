@@ -17,7 +17,7 @@ from integrations.connections import (
     read_credentials,
     save_credentials,
 )
-from integrations.sync import ActiveJobError, has_active_job, purge_history
+from integrations.sync import SyncSummary, ensure_idle, purge_history, sync_summary
 from user_config.service import mask
 
 
@@ -32,6 +32,7 @@ class IbkrConnection:
     query_id: str | None
     token: str | None
     updated_at: datetime | None
+    sync: SyncSummary
 
 
 def describe_connection(
@@ -45,6 +46,7 @@ def describe_connection(
             query_id=None,
             token=None,
             updated_at=None,
+            sync=sync_summary(None, broker.broker_id),
         )
 
     try:
@@ -61,6 +63,7 @@ def describe_connection(
         query_id=query_id,
         token=token,
         updated_at=connection.updated_at,
+        sync=sync_summary(connection, broker.broker_id),
     )
 
 
@@ -86,8 +89,7 @@ def save_connection(
 
 
 def disconnect(session: Session, broker_id: str, user_id: str) -> None:
-    if has_active_job(session, broker_id, user_id):
-        raise ActiveJobError("a sync is running")
+    ensure_idle(session, broker_id, user_id)
 
     purge_history(session, broker_id, user_id)
     delete_connection(session, broker_id, user_id)

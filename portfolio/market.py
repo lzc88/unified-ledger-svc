@@ -42,7 +42,7 @@ def fx_symbol(currency: str, base: str) -> str:
 class MarketData(Protocol):
     def quotes(self, symbols: set[str]) -> dict[str, Quote]: ...
 
-    def monthly_closes(
+    def daily_closes(
         self, symbols: set[str], start: date
     ) -> dict[str, dict[date, Decimal]]: ...
 
@@ -63,11 +63,11 @@ class YahooMarketData:
                 pass
         return quotes
 
-    def monthly_closes(
+    def daily_closes(
         self, symbols: set[str], start: date
     ) -> dict[str, dict[date, Decimal]]:
-        key = ("monthly", tuple(sorted(symbols)), start)
-        return self._cached(key, lambda: self._monthly(sorted(symbols), start))
+        key = ("daily", tuple(sorted(symbols)), start)
+        return self._cached(key, lambda: self._daily(sorted(symbols), start))
 
     def _cached(self, key: tuple, load: Callable):
         with self._lock:
@@ -92,14 +92,14 @@ class YahooMarketData:
         return Quote(Decimal(str(price)), currency)
 
     @staticmethod
-    def _monthly(symbols: list[str], start: date) -> dict[str, dict[date, Decimal]]:
+    def _daily(symbols: list[str], start: date) -> dict[str, dict[date, Decimal]]:
         if not symbols:
             return {}
         try:
             history = yf.download(
                 symbols,
                 start=start.isoformat(),
-                interval="1mo",
+                interval="1d",
                 auto_adjust=False,
                 progress=False,
                 multi_level_index=True,
@@ -109,10 +109,10 @@ class YahooMarketData:
             raise MarketDataError("no price history from Yahoo") from exc
         if history is None or history.empty:
             raise MarketDataError("no price history from Yahoo")
-        closes = history["Close"].ffill()
+        closes = history["Close"]
         return {
             symbol: {
-                ts.date().replace(day=1): Decimal(str(value))
+                ts.date(): Decimal(str(value))
                 for ts, value in closes[symbol].items()
                 if not math.isnan(value)
             }

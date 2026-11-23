@@ -1,11 +1,12 @@
 from .adapter import IbkrAdapter
-from .flex import FlexClient, FlexError
-from .mapping import FlexFormatError, map_statements
+from .flex import FlexClient, FlexError, fetch_document
+from .mapping import FlexFormatError, map_snapshot
 
 __all__ = [
     "FlexClient",
     "FlexError",
     "FlexFormatError",
     "IbkrAdapter",
-    "map_statements",
+    "fetch_document",
+    "map_snapshot",
 ]

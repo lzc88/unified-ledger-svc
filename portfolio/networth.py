@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -9,9 +9,9 @@ from config.config import CPF_CURRENCY
 from cpf.service import closing_total
 from database.models import CashAccount, CpfStatement
 
-from .ledger import Event
 from .market import MarketData, fx_symbol
-from .summary import NoActivityError, Rate, _add, _float, _mul, _sum, build_summary
+from .snapshots import AccountSnapshot
+from .summary import NoSnapshotsError, Rate, _add, _float, _mul, _sum, build_summary
 
 
 class Investments(BaseModel):
@@ -51,7 +51,7 @@ class NetWorth(BaseModel):
 
 def build_net_worth(
     user_id: str,
-    events: Iterable[Event],
+    snapshots: Sequence[AccountSnapshot],
     accounts: Sequence[CashAccount],
     market: MarketData,
     currency: str,
@@ -60,7 +60,7 @@ def build_net_worth(
     include_cpf: bool = False,
 ) -> NetWorth:
     investments, fx_rates, warnings = _investments(
-        user_id, events, market, currency, today
+        user_id, snapshots, market, currency, today
     )
 
     fx = _fx(accounts, cpf, market, currency, warnings)
@@ -94,14 +94,14 @@ def build_net_worth(
 
 def _investments(
     user_id: str,
-    events: Iterable[Event],
+    snapshots: Sequence[AccountSnapshot],
     market: MarketData,
     currency: str,
     today: date,
 ) -> tuple[Investments, dict[str, float], list[str]]:
     try:
-        summary = build_summary(user_id, events, market, currency, today)
-    except NoActivityError:
+        summary = build_summary(user_id, snapshots, market, currency, today)
+    except NoSnapshotsError:
         empty = Investments(value=0, cash=0, market_value=0)
         return empty, {currency: 1.0}, []
 

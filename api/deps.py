@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cache
 from typing import Annotated
 
@@ -12,12 +12,11 @@ from config.config import AUTH_COOKIE_NAME
 from database.db import SessionLocal
 from database.models import User
 from integrations.base import BrokerAdapter
-from integrations.ibkr import IbkrAdapter
 from integrations.openfigi import OpenFigiClient
+from integrations.registry import ADAPTERS
 from portfolio.market import MarketData, YahooMarketData
 
 _market_data = YahooMarketData()
-_ibkr = IbkrAdapter()
 _session_cookie = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
 
 SessionToken = Annotated[str | None, Depends(_session_cookie)]
@@ -27,8 +26,19 @@ def get_session_factory() -> sessionmaker[Session]:
     return SessionLocal
 
 
-def get_ibkr_adapter() -> BrokerAdapter:
-    return _ibkr
+def get_adapters() -> Mapping[str, BrokerAdapter]:
+    return ADAPTERS
+
+
+Adapters = Annotated[Mapping[str, BrokerAdapter], Depends(get_adapters)]
+
+
+def get_ibkr_adapter(adapters: Adapters) -> BrokerAdapter:
+    return adapters["ibkr"]
+
+
+def get_webull_adapter(adapters: Adapters) -> BrokerAdapter:
+    return adapters["webull"]
 
 
 @cache
