@@ -164,7 +164,13 @@ def run_sync(
 def fail_interrupted_syncs(session: Session) -> int:
     result = session.execute(
         update(BrokerConnection)
-        .where(BrokerConnection.last_sync_status == SyncStatus.RUNNING)
+        .where(
+            BrokerConnection.last_sync_status == SyncStatus.RUNNING,
+            or_(
+                BrokerConnection.last_sync_started_at.is_(None),
+                BrokerConnection.last_sync_started_at < func.now() - SYNC_STALE_AFTER,
+            ),
+        )
         .values(
             last_sync_status=SyncStatus.FAILED,
             last_sync_error=SYNC_INTERRUPTED_ERROR,

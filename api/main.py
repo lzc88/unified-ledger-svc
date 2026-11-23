@@ -28,17 +28,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     lock = acquire_scheduler_lock(engine) if SYNC_SCHEDULER_ENABLED else None
     scheduler = None
 
-    if lock is not None:
-        with session_factory.begin() as session:
-            if count := fail_interrupted_syncs(session):
-                log.warning("marked %d interrupted sync(s) as failed", count)
-
-        scheduler = create_scheduler(session_factory, get_openfigi_factory())
-        scheduler.start()
-    elif SYNC_SCHEDULER_ENABLED:
-        log.info("another process owns the sync scheduler")
-
     try:
+        if lock is not None:
+            with session_factory.begin() as session:
+                if count := fail_interrupted_syncs(session):
+                    log.warning("marked %d interrupted sync(s) as failed", count)
+
+            scheduler = create_scheduler(session_factory, get_openfigi_factory())
+            scheduler.start()
+        elif SYNC_SCHEDULER_ENABLED:
+            log.info("another process owns the sync scheduler")
+
         yield
     finally:
         if scheduler is not None:
