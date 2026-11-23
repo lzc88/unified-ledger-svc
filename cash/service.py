@@ -12,9 +12,7 @@ from sqlalchemy.orm import Session
 
 from database.models import CashAccount
 
-UPDATABLE_FIELDS = frozenset(
-    {"institution", "label", "balance", "currency", "interest_rate"}
-)
+UPDATABLE_FIELDS = frozenset({"label", "balance", "currency"})
 DUPLICATE_CONSTRAINT = "uq_cash_accounts_from_user_id"
 
 
@@ -28,43 +26,29 @@ class DuplicateCashAccountError(Exception):
 
 class CashAccountView(BaseModel):
     id: uuid.UUID
-    institution: str
     label: str
     balance: float
     currency: str
-    interest_rate: float | None
-    estimated_annual_interest: float | None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_row(cls, row: CashAccount) -> "CashAccountView":
-        interest = estimated_interest(row.balance, row.interest_rate)
         return cls(
             id=row.cash_account_id,
-            institution=row.institution,
             label=row.label,
             balance=float(row.balance),
             currency=row.currency,
-            interest_rate=_float(row.interest_rate),
-            estimated_annual_interest=_float(interest),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
-
-
-def estimated_interest(balance: Decimal, rate: Decimal | None) -> Decimal | None:
-    if rate is None:
-        return None
-
-    return balance * rate / 100
 
 
 def list_accounts(session: Session, user_id: str) -> list[CashAccount]:
     query = (
         select(CashAccount)
         .where(CashAccount.from_user_id == user_id)
-        .order_by(CashAccount.institution, CashAccount.label)
+        .order_by(CashAccount.label)
     )
     return list(session.scalars(query))
 
@@ -73,19 +57,15 @@ def create_account(
     session: Session,
     user_id: str,
     *,
-    institution: str,
     label: str,
     balance: Decimal,
     currency: str,
-    interest_rate: Decimal | None = None,
 ) -> CashAccount:
     row = CashAccount(
         from_user_id=user_id,
-        institution=institution,
         label=label,
         balance=balance,
         currency=currency,
-        interest_rate=interest_rate,
     )
     with _savepoint(session):
         session.add(row)
@@ -142,9 +122,6 @@ def _savepoint(session: Session) -> Iterator[None]:
         if DUPLICATE_CONSTRAINT not in str(exc.orig):
             raise
         raise DuplicateCashAccountError(
-            "a cash account with this institution and label already exists"
+            "a cash account with this label already exists"
         ) from None
 
-
-def _float(value: Decimal | None) -> float | None:
-    return None if value is None else float(value)

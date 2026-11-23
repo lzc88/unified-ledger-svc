@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from api.deps import get_session_factory
 from api.router import api_router
+from api.routes.integrations.sync import SyncConflictError
 from integrations.sync import fail_interrupted_jobs
 
 log = logging.getLogger(__name__)
@@ -35,4 +36,12 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": jsonable_encoder(errors)},
+    )
+
+
+@app.exception_handler(SyncConflictError)
+async def _sync_conflict(request: Request, exc: SyncConflictError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": str(exc), "code": exc.code},
     )

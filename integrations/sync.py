@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,9 +20,11 @@ from database.models import (
     ExecutedFxOrder,
     ExecutedTrade,
     ExecutedTradeOrder,
+    FxFee,
     SyncJob,
     SyncKind,
     SyncStatus,
+    TradeFee,
 )
 from user_config.service import (
     ConfigMissingError,
@@ -189,6 +191,79 @@ def fail_interrupted_jobs(session: Session) -> int:
         )
     )
     return result.rowcount
+
+
+def has_active_job(session: Session, broker_id: str, user_id: str) -> bool:
+    return bool(
+        session.scalar(
+            select(
+                exists().where(
+                    SyncJob.from_broker_id == broker_id,
+                    SyncJob.from_user_id == user_id,
+                    SyncJob.status.in_(ACTIVE_SYNC_STATUSES),
+                )
+            )
+        )
+    )
+
+
+def purge_history(session: Session, broker_id: str, user_id: str) -> None:
+    accounts = select(Account.account_id).where(
+        Account.from_user_id == user_id, Account.from_broker_id == broker_id
+    )
+
+    trade_orders = select(ExecutedTradeOrder.trade_order_id).where(
+        ExecutedTradeOrder.from_broker_id == broker_id,
+        ExecutedTradeOrder.from_account_id.in_(accounts),
+    )
+    trades = select(ExecutedTrade.trade_id).where(
+        ExecutedTrade.from_broker_id == broker_id,
+        ExecutedTrade.from_trade_order_id.in_(trade_orders),
+    )
+
+    fx_orders = select(ExecutedFxOrder.fx_order_id).where(
+        ExecutedFxOrder.from_broker_id == broker_id,
+        ExecutedFxOrder.from_account_id.in_(accounts),
+    )
+    fx = select(ExecutedFx.fx_id).where(
+        ExecutedFx.from_broker_id == broker_id,
+        ExecutedFx.from_fx_order_id.in_(fx_orders),
+    )
+
+    statements = (
+        delete(TradeFee).where(
+            TradeFee.from_broker_id == broker_id, TradeFee.from_trade_id.in_(trades)
+        ),
+        delete(ExecutedTrade).where(
+            ExecutedTrade.from_broker_id == broker_id,
+            ExecutedTrade.from_trade_order_id.in_(trade_orders),
+        ),
+        delete(ExecutedTradeOrder).where(
+            ExecutedTradeOrder.from_broker_id == broker_id,
+            ExecutedTradeOrder.from_account_id.in_(accounts),
+        ),
+        delete(FxFee).where(FxFee.from_broker_id == broker_id, FxFee.from_fx_id.in_(fx)),
+        delete(ExecutedFx).where(
+            ExecutedFx.from_broker_id == broker_id,
+            ExecutedFx.from_fx_order_id.in_(fx_orders),
+        ),
+        delete(ExecutedFxOrder).where(
+            ExecutedFxOrder.from_broker_id == broker_id,
+            ExecutedFxOrder.from_account_id.in_(accounts),
+        ),
+        delete(ExecutedCash).where(
+            ExecutedCash.from_broker_id == broker_id,
+            ExecutedCash.from_account_id.in_(accounts),
+        ),
+        delete(SyncJob).where(
+            SyncJob.from_broker_id == broker_id, SyncJob.from_user_id == user_id
+        ),
+        delete(Account).where(
+            Account.from_broker_id == broker_id, Account.from_user_id == user_id
+        ),
+    )
+    for statement in statements:
+        session.execute(statement.execution_options(synchronize_session=False))
 
 
 def latest_jobs(

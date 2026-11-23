@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -23,6 +24,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
+
+from config.config import CASH_CURRENCIES
 
 from .db import Base
 
@@ -70,6 +73,10 @@ def _enum(cls: type[enum.Enum], name: str) -> Enum:
 
 def _currency_check(column: str) -> CheckConstraint:
     return CheckConstraint(f"{column} ~ '^[A-Z]{{3}}$'", name=f"{column}_iso")
+
+
+def _quoted(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
 
 
 class Timestamped:
@@ -156,19 +163,92 @@ class CashAccount(Timestamped, Base):
     from_user_id: Mapped[str] = mapped_column(
         String(100), ForeignKey("users.user_id")
     )
-    institution: Mapped[str] = mapped_column(String(100))
     label: Mapped[str] = mapped_column(String(100))
     balance: Mapped[Decimal] = mapped_column(Amount)
     currency: Mapped[str] = mapped_column(CHAR(3))
-    interest_rate: Mapped[Decimal | None] = mapped_column(Amount)
 
     __table_args__ = (
-        UniqueConstraint("from_user_id", "institution", "label"),
+        UniqueConstraint("from_user_id", "label"),
         CheckConstraint("balance >= 0", name="balance_non_negative"),
         CheckConstraint(
-            "interest_rate >= 0 AND interest_rate <= 100", name="interest_rate_range"
+            f"currency IN ({_quoted(CASH_CURRENCIES)})", name="currency_allowed"
         ),
-        _currency_check("currency"),
+    )
+
+
+class CpfStatement(Timestamped, Base):
+    __tablename__ = "cpf_statements"
+
+    statement_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), unique=True
+    )
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    opening_oa: Mapped[Decimal] = mapped_column(Amount)
+    opening_sa: Mapped[Decimal] = mapped_column(Amount)
+    opening_ma: Mapped[Decimal] = mapped_column(Amount)
+    closing_oa: Mapped[Decimal] = mapped_column(Amount)
+    closing_sa: Mapped[Decimal] = mapped_column(Amount)
+    closing_ma: Mapped[Decimal] = mapped_column(Amount)
+
+    __table_args__ = (
+        CheckConstraint("period_start <= period_end", name="period_range"),
+    )
+
+
+class CpfTransaction(Timestamped, Base):
+    __tablename__ = "cpf_transactions"
+
+    cpf_tx_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    from_statement_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("cpf_statements.statement_id", ondelete="CASCADE"),
+    )
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id")
+    )
+    line_no: Mapped[int] = mapped_column(Integer)
+    tx_date: Mapped[date] = mapped_column(Date)
+    code: Mapped[str] = mapped_column(String(3))
+    contribution_month: Mapped[date | None] = mapped_column(Date)
+    employer: Mapped[str | None] = mapped_column(String(200))
+    oa_amount: Mapped[Decimal] = mapped_column(Amount)
+    sa_amount: Mapped[Decimal] = mapped_column(Amount)
+    ma_amount: Mapped[Decimal] = mapped_column(Amount)
+
+    __table_args__ = (
+        Index("ix_cpf_transactions_user_date", "from_user_id", "tx_date"),
+        UniqueConstraint("from_statement_id", "line_no"),
+        CheckConstraint("code ~ '^[A-Z]{2,3}$'", name="code_format"),
+        CheckConstraint(
+            "EXTRACT(DAY FROM contribution_month) = 1",
+            name="contribution_month_first_day",
+        ),
+    )
+
+
+class ForecastPlan(Timestamped, Base):
+    __tablename__ = "forecast_plans"
+
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), primary_key=True
+    )
+    gross_income: Mapped[Decimal] = mapped_column(Amount)
+    end_month: Mapped[date] = mapped_column(Date)
+    remainder_destination_id: Mapped[str | None] = mapped_column(String(64))
+    destinations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+    __table_args__ = (
+        CheckConstraint("gross_income >= 0", name="gross_income_non_negative"),
+        CheckConstraint(
+            "EXTRACT(DAY FROM end_month) = 1", name="end_month_first_day"
+        ),
     )
 
 

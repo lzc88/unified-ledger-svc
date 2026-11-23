@@ -4,6 +4,7 @@ from api.deps import CurrentUser, SessionFactory
 from api.schemas.config import ConfigEntry, ConfigUpdate
 from user_config.service import (
     ConfigNotSetError,
+    InvalidConfigValueError,
     UnknownConfigKeyError,
     delete_config,
     list_configs,
@@ -28,7 +29,7 @@ def put_config(
     try:
         with session_factory.begin() as session:
             entry = set_config(session, user.user_id, key, body.value)
-    except UnknownConfigKeyError as exc:
+    except (UnknownConfigKeyError, InvalidConfigValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     return ConfigEntry.from_stored(entry)
