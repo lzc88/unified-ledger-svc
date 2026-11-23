@@ -34,7 +34,7 @@ def put_plan(
             [
                 {
                     "type": "value_error",
-                    "loc": ("body", "destinations", index, "cash_account_id"),
+                    "loc": ("body", "destinations", index, "target_id"),
                     "msg": "cash account not found.",
                 }
                 for index in exc.indices
