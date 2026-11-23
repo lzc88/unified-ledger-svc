@@ -249,6 +249,7 @@ class BrokerConnection(Timestamped, Base):
     last_sync_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    last_sync_skipped: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
 
 class Account(Timestamped, Base):

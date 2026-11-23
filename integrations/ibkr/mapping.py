@@ -1,4 +1,6 @@
+import re
 import xml.etree.ElementTree as ET
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from config.config import (
@@ -39,7 +41,30 @@ def map_snapshot(document: bytes) -> Snapshot:
     for statement in root.iter("FlexStatement"):
         _map_statement(snapshot, statement)
 
+        statement_date = _statement_date(statement)
+        if statement_date is None:
+            continue
+
+        if snapshot.as_of is None or statement_date > snapshot.as_of:
+            snapshot.as_of = statement_date
+
     return snapshot
+
+
+def _statement_date(statement: ET.Element) -> date | None:
+
+    raw = statement.get("toDate", "").strip()
+    if not raw:
+        return None
+
+    digits = re.sub(r"\D", "", raw)
+
+    try:
+        return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+    except ValueError:
+        raise FlexFormatError(
+            f"FlexStatement toDate={raw!r} is not a yyyyMMdd date"
+        ) from None
 
 
 def _map_statement(snapshot: Snapshot, statement: ET.Element) -> None:

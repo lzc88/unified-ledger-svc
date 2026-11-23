@@ -8,7 +8,7 @@ from integrations.connections import (
     NotConnectedError,
     load_credentials,
 )
-from integrations.sync import ActiveSyncError, run_sync, snapshot_today, start_sync
+from integrations.sync import ActiveSyncError, run_sync, start_sync
 from user_config.service import ConfigUnreadableError, read_config
 
 
@@ -51,7 +51,5 @@ def sync(
     except tuple(CONFLICT_CODES) as exc:
         raise SyncConflictError(CONFLICT_CODES[type(exc)], str(exc)) from exc
 
-    background.add_task(
-        run_sync, session_factory, broker, figi_factory, user.user_id, snapshot_today()
-    )
+    background.add_task(run_sync, session_factory, broker, figi_factory, user.user_id)
     return state

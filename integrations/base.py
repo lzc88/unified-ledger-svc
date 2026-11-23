@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -39,18 +40,21 @@ class Snapshot:
     positions: dict[tuple[str, str], Row] = field(default_factory=dict)
     cash: dict[tuple[str, str], Row] = field(default_factory=dict)
     skipped: list[SkippedRow] = field(default_factory=list)
+    as_of: date | None = None
 
     def drop_asset(self, broker_asset_id: str, reason: str) -> None:
         self.assets.pop(broker_asset_id, None)
-        self.identities.pop(broker_asset_id, None)
+        identity = self.identities.pop(broker_asset_id, None)
+
+        attributes = {"broker_asset_id": broker_asset_id}
+        if identity is not None:
+            attributes["symbol"] = identity.symbol
 
         keys = [key for key in self.positions if key[1] == broker_asset_id]
         for key in keys:
             del self.positions[key]
             self.skipped.append(
-                SkippedRow(
-                    "Positions", None, reason, {"broker_asset_id": broker_asset_id}
-                )
+                SkippedRow("Positions", broker_asset_id, reason, dict(attributes))
             )
 
 

@@ -19,7 +19,7 @@ from database.models import BrokerConnection
 from .base import BrokerAdapter
 from .connections import NotConnectedError
 from .registry import ADAPTERS
-from .sync import ActiveSyncError, FigiFactory, run_sync, snapshot_today, start_sync
+from .sync import ActiveSyncError, FigiFactory, run_sync, start_sync
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +46,7 @@ def sync_all(
             log.warning("no adapter for %s; skipping %s", broker_id, user_id)
             continue
 
-        day = today or snapshot_today()
-        if _sync_one(session_factory, broker, figi_factory, user_id, day):
+        if _sync_one(session_factory, broker, figi_factory, user_id, today):
             started += 1
 
     return started
@@ -102,7 +101,7 @@ def _sync_one(
     broker: BrokerAdapter,
     figi_factory: FigiFactory,
     user_id: str,
-    today: date,
+    today: date | None,
 ) -> bool:
     try:
         with session_factory.begin() as session:
