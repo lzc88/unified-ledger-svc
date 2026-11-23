@@ -182,6 +182,9 @@ def _map_position(
 
     if quantity == 0:
         snapshot.positions.pop(key, None)
+        if not any(held == asset_id for _, held in snapshot.positions):
+            snapshot.assets.pop(asset_id, None)
+            snapshot.identities.pop(asset_id, None)
         return
 
     snapshot.positions[key] = {
