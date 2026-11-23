@@ -12,6 +12,7 @@ from integrations.webull import WebullAdapter
 from integrations.webull.client import WebullApiError
 from integrations.webull.connection import (
     AppSecretRequiredError,
+    ConnectionChangedError,
     WebullConnection as WebullConnectionState,
     create_connection,
     describe_connection,
@@ -27,6 +28,7 @@ CONFLICT_CODES: dict[type[Exception], str] = {
     ActiveSyncError: "sync_active",
     NotConnectedError: "config_missing",
     CredentialsUnreadableError: "config_unreadable",
+    ConnectionChangedError: "connection_changed",
 }
 
 
@@ -51,6 +53,13 @@ def _translate(exc: Exception) -> Exception:
     return SyncConflictError(CONFLICT_CODES[type(exc)], str(exc))
 
 
+def _current(
+    session_factory: SessionFactory, broker: WebullAdapter, user_id: str
+) -> WebullConnection:
+    with session_factory() as session:
+        return _response(describe_connection(session, broker, user_id))
+
+
 HANDLED = (WebullApiError, AppSecretRequiredError, *CONFLICT_CODES)
 
 
@@ -58,8 +67,7 @@ HANDLED = (WebullApiError, AppSecretRequiredError, *CONFLICT_CODES)
 def get_webull_connection(
     user: CurrentUser, session_factory: SessionFactory, broker: Broker
 ) -> WebullConnection:
-    with session_factory() as session:
-        return _response(describe_connection(session, broker, user.user_id))
+    return _current(session_factory, broker, user.user_id)
 
 
 @router.post("/connection")
@@ -70,17 +78,17 @@ def post_webull_connection(
     broker: Broker,
 ) -> WebullConnection:
     try:
-        with session_factory.begin() as session:
-            state = create_connection(
-                session,
-                broker,
-                user.user_id,
-                app_key=body.app_key,
-                app_secret=body.app_secret,
-            )
-            return _response(state)
+        create_connection(
+            session_factory,
+            broker,
+            user.user_id,
+            app_key=body.app_key,
+            app_secret=body.app_secret,
+        )
     except HANDLED as exc:
         raise _translate(exc) from exc
+
+    return _current(session_factory, broker, user.user_id)
 
 
 @router.post("/connection/verify")
@@ -88,10 +96,11 @@ def verify_webull_connection(
     user: CurrentUser, session_factory: SessionFactory, broker: Broker
 ) -> WebullConnection:
     try:
-        with session_factory.begin() as session:
-            return _response(verify_connection(session, broker, user.user_id))
+        verify_connection(session_factory, broker, user.user_id)
     except HANDLED as exc:
         raise _translate(exc) from exc
+
+    return _current(session_factory, broker, user.user_id)
 
 
 @router.delete("/connection", status_code=status.HTTP_204_NO_CONTENT)

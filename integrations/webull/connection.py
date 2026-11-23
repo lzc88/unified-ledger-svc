@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from config.config import (
     CONFIG_MASK_CHAR,
@@ -28,6 +28,10 @@ from .adapter import WebullAdapter
 
 
 class AppSecretRequiredError(Exception):
+    pass
+
+
+class ConnectionChangedError(Exception):
     pass
 
 
@@ -69,45 +73,42 @@ def describe_connection(
 
 
 def create_connection(
-    session: Session,
+    session_factory: sessionmaker[Session],
     broker: WebullAdapter,
     user_id: str,
     *,
     app_key: str | None,
     app_secret: str | None,
-) -> WebullConnection:
-    ensure_idle(session, broker.broker_id, user_id, lock=False)
-
-    app_key, app_secret = _resolve_keys(session, broker, user_id, app_key, app_secret)
+) -> None:
+    with session_factory() as session:
+        ensure_idle(session, broker.broker_id, user_id, lock=False)
+        app_key, app_secret = _resolve_keys(
+            session, broker, user_id, app_key, app_secret
+        )
 
     token = broker.client(app_key, app_secret).create_token()
 
-    ensure_idle(session, broker.broker_id, user_id)
-    save_credentials(
-        session,
-        broker,
-        user_id,
-        {
-            WEBULL_APP_KEY_CREDENTIAL: app_key,
-            WEBULL_APP_SECRET_CREDENTIAL: app_secret,
-            WEBULL_ACCESS_TOKEN_CREDENTIAL: token.token,
-            WEBULL_TOKEN_STATUS_CREDENTIAL: token.status,
-        },
-    )
-
-    return describe_connection(session, broker, user_id)
+    with session_factory.begin() as session:
+        ensure_idle(session, broker.broker_id, user_id)
+        save_credentials(
+            session,
+            broker,
+            user_id,
+            {
+                WEBULL_APP_KEY_CREDENTIAL: app_key,
+                WEBULL_APP_SECRET_CREDENTIAL: app_secret,
+                WEBULL_ACCESS_TOKEN_CREDENTIAL: token.token,
+                WEBULL_TOKEN_STATUS_CREDENTIAL: token.status,
+            },
+        )
 
 
 def verify_connection(
-    session: Session, broker: WebullAdapter, user_id: str
-) -> WebullConnection:
-    connection = get_connection(session, broker.broker_id, user_id)
-    if connection is None:
-        raise NotConnectedError(
-            f"{broker.broker_id} is not connected: add it under my investments"
-        )
+    session_factory: sessionmaker[Session], broker: WebullAdapter, user_id: str
+) -> None:
+    with session_factory() as session:
+        credentials = _connected_credentials(session, broker, user_id)
 
-    credentials = read_credentials(connection, broker)
     access_token = credentials[WEBULL_ACCESS_TOKEN_CREDENTIAL]
 
     checked = broker.client(
@@ -116,24 +117,44 @@ def verify_connection(
         access_token,
     ).check_token(access_token)
 
-    save_credentials(
-        session,
-        broker,
-        user_id,
-        credentials
-        | {
-            WEBULL_ACCESS_TOKEN_CREDENTIAL: checked.token,
-            WEBULL_TOKEN_STATUS_CREDENTIAL: checked.status,
-        },
-    )
+    with session_factory.begin() as session:
+        ensure_idle(session, broker.broker_id, user_id)
 
-    return describe_connection(session, broker, user_id)
+        current = _connected_credentials(session, broker, user_id)
+        if current != credentials:
+            raise ConnectionChangedError(
+                "the Webull connection changed while it was being verified; "
+                "verify it again"
+            )
+
+        save_credentials(
+            session,
+            broker,
+            user_id,
+            credentials
+            | {
+                WEBULL_ACCESS_TOKEN_CREDENTIAL: checked.token,
+                WEBULL_TOKEN_STATUS_CREDENTIAL: checked.status,
+            },
+        )
 
 
 def disconnect(session: Session, broker_id: str, user_id: str) -> None:
     ensure_idle(session, broker_id, user_id)
     purge_history(session, broker_id, user_id)
     delete_connection(session, broker_id, user_id)
+
+
+def _connected_credentials(
+    session: Session, broker: WebullAdapter, user_id: str
+) -> dict[str, str]:
+    connection = get_connection(session, broker.broker_id, user_id)
+    if connection is None:
+        raise NotConnectedError(
+            f"{broker.broker_id} is not connected: add it under my investments"
+        )
+
+    return read_credentials(connection, broker)
 
 
 def _resolve_keys(
