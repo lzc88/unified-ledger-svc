@@ -5,6 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal, get_args
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
@@ -92,29 +93,23 @@ class ConfigKey:
 
 
 CONFIG_KEYS = {
-    "IBKR_FLEX_TOKEN": ConfigKey(
-        group="ibkr",
-        label="Flex token",
-        description="IBKR Flex Web Service token",
-        secret=True,
-        required=True,
-    ),
-    "IBKR_FLEX_QUERY_ID": ConfigKey(
-        group="ibkr",
-        label="Flex query ID",
-        description="IBKR Flex query ID",
+    "BIRTH_YEAR": ConfigKey(
+        group="profile",
+        label="Birth year",
+        description="used for cpf contribution rates in the forecast.",
         secret=False,
-        required=True,
-    ),
-    "OPENFIGI_API_KEY": ConfigKey(
-        group="openfigi",
-        label="API key",
-        description="OpenFIGI API key (optional, raises rate limits)",
-        secret=True,
         required=False,
     ),
 }
-IBKR_CONFIG_KEYS = ("IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID")
+BIRTH_YEAR_MIN = 1900
+
+IBKR_FLEX_TOKEN_KEY = "IBKR_FLEX_TOKEN"
+IBKR_FLEX_QUERY_ID_KEY = "IBKR_FLEX_QUERY_ID"
+OPENFIGI_API_KEY_KEY = "OPENFIGI_API_KEY"
+IBKR_CONFIG_KEYS = (IBKR_FLEX_TOKEN_KEY, IBKR_FLEX_QUERY_ID_KEY)
+IBKR_CONNECTION_KEYS = (*IBKR_CONFIG_KEYS, OPENFIGI_API_KEY_KEY)
+INTEGRATION_KEYS = frozenset(IBKR_CONNECTION_KEYS)
+
 CONFIG_VALUE_MAX_LENGTH = 512
 CONFIG_MASK_CHAR = "•"
 CONFIG_MASK_LENGTH = 8
@@ -129,6 +124,13 @@ LEDGER_MAX_LIMIT = 200
 
 PORTFOLIO_DEFAULT_CURRENCY = "SGD"
 PORTFOLIO_DUST = Decimal("0.000001")
+
+"""
+Cash account configuration and constants.
+"""
+
+CashCurrency = Literal["SGD", "USD", "EUR", "GBP", "JPY", "AUD", "HKD", "CNY", "MYR"]
+CASH_CURRENCIES: tuple[str, ...] = get_args(CashCurrency)
 
 """
 CPF statement configuration and constants.
@@ -211,6 +213,16 @@ CPF_CODES = {
     "WDL": "Withdrawal of CPF savings",
     "WIS": "Government Top-up: Workfare Income Supplement",
 }
+
+"""
+Forecast plan configuration and constants.
+"""
+
+FORECAST_TIMEZONE = ZoneInfo("Asia/Singapore")
+FORECAST_MAX_MONTHS_AHEAD = 600
+FORECAST_MAX_DESTINATIONS = 30
+FORECAST_DESTINATION_ID_MAX_LENGTH = 64
+FORECAST_DESTINATION_NAME_MAX_LENGTH = 60
 
 MARKET_CACHE_TTL_SECONDS = 300
 MARKET_EXCH_CODE_SUFFIXES = {

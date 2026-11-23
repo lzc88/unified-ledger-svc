@@ -28,6 +28,20 @@ from user_config.service import (
 )
 
 
+class SyncConflictError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+_CONFLICT_CODES: dict[type[Exception], str] = {
+    NoActivityError: "no_activity",
+    ActiveJobError: "job_active",
+    ConfigMissingError: "config_missing",
+    ConfigUnreadableError: "config_unreadable",
+}
+
+
 def sync_router(get_broker: Callable[[], BrokerAdapter]) -> APIRouter:
     """Backfill, refresh and job endpoints for the broker that `get_broker` provides."""
     router = APIRouter()
@@ -118,12 +132,8 @@ def _start(
             session.flush()
             session.refresh(job)
             created = Job.model_validate(job)
-    except (
-        ActiveJobError,
-        NoActivityError,
-        ConfigMissingError,
-        ConfigUnreadableError,
-    ) as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except tuple(_CONFLICT_CODES) as exc:
+        raise SyncConflictError(_CONFLICT_CODES[type(exc)], str(exc)) from exc
+
     background.add_task(run_job, session_factory, broker, figi_factory, created.job_id)
     return created
