@@ -105,7 +105,7 @@ def build_summary(
 
     warnings: list[str] = []
     ordered = sorted(snapshots, key=lambda s: (s.snapshot_date, s.broker_id, s.account_id))
-    latest = _latest(ordered)
+    latest = _latest(ordered, warnings)
     snapshot_date = max(s.snapshot_date for s in latest.values())
     _warn_stale(latest, snapshot_date, warnings)
 
@@ -177,10 +177,26 @@ def build_summary(
     )
 
 
-def _latest(ordered: Sequence[AccountSnapshot]) -> dict[AccountKey, AccountSnapshot]:
+def _latest(
+    ordered: Sequence[AccountSnapshot], warnings: list[str]
+) -> dict[AccountKey, AccountSnapshot]:
+    newest = {snapshot.broker_id: snapshot.snapshot_date for snapshot in ordered}
+
     latest: dict[AccountKey, AccountSnapshot] = {}
+    last_seen: dict[AccountKey, date] = {}
     for snapshot in ordered:
-        latest[(snapshot.broker_id, snapshot.account_id)] = snapshot
+        key = (snapshot.broker_id, snapshot.account_id)
+        last_seen[key] = snapshot.snapshot_date
+        if snapshot.snapshot_date == newest[snapshot.broker_id]:
+            latest[key] = snapshot
+
+    for (broker_id, account_id), seen in sorted(last_seen.items()):
+        if seen < newest[broker_id]:
+            warnings.append(
+                f"{broker_id} account {account_id} has not been returned since "
+                f"{seen.isoformat()}; it is excluded"
+            )
+
     return dict(sorted(latest.items()))
 
 
@@ -379,7 +395,11 @@ def _history(
     points = []
     day = start
     while day <= end:
-        for snapshot in by_date.get(day, ()):
+        batch = by_date.get(day, ())
+        synced = {snapshot.broker_id for snapshot in batch}
+        if synced:
+            state = {key: s for key, s in state.items() if key[0] not in synced}
+        for snapshot in batch:
             state[(snapshot.broker_id, snapshot.account_id)] = snapshot
 
         if day == end:
