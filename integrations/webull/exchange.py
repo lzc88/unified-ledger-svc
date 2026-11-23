@@ -4,8 +4,15 @@ import threading
 import yfinance as yf
 
 from config.config import YAHOO_EXCHANGE_TO_EXCH_CODES
+from integrations.base import IntegrationError
 
 log = logging.getLogger(__name__)
+
+NOT_FOUND = 404
+
+
+class ExchangeLookupError(IntegrationError):
+    pass
 
 
 class YahooExchangeLookup:
@@ -36,5 +43,11 @@ class YahooExchangeLookup:
         try:
             return yf.Ticker(yahoo_symbol).info.get("exchange")
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) == NOT_FOUND:
+                return None
+
             log.warning("Yahoo exchange lookup for %s failed: %s", symbol, exc)
-            return None
+            raise ExchangeLookupError(
+                f"Yahoo exchange lookup for {symbol} failed; try the sync again"
+            ) from exc
