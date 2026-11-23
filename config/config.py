@@ -13,10 +13,6 @@ from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL, make_url
 
-"""
-IBKR Flex Web Service API configuration and constants.
-"""
-
 IBKR_FLEX_SEND_REQUEST_URL = (
     "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
 )
@@ -69,10 +65,6 @@ IBKR_LISTING_EXCHANGE_TO_EXCH_CODES = {
     "TSEJ": frozenset({"JT"}),
 }
 
-"""
-Webull OpenAPI (Singapore) configuration and constants.
-"""
-
 WEBULL_REGION = "sg"
 WEBULL_API_HOST = os.environ.get("WEBULL_API_HOST")
 WEBULL_HTTP_TIMEOUT_SECONDS = 30
@@ -89,10 +81,6 @@ WEBULL_CURRENCY_TO_EXCH_CODES = {
     "HKD": frozenset({"HK"}),
     "SGD": frozenset({"SP"}),
 }
-
-"""
-OpenFIGI API configuration and constants.
-"""
 
 OPENFIGI_MAPPING_URL = "https://api.openfigi.com/v3/mapping"
 OPENFIGI_HTTP_TIMEOUT_SECONDS = 30.0
@@ -185,16 +173,8 @@ PORTFOLIO_DEFAULT_CURRENCY = "SGD"
 PORTFOLIO_DUST = Decimal("0.000001")
 PORTFOLIO_HISTORY_LOOKBACK_DAYS = 7
 
-"""
-Cash account configuration and constants.
-"""
-
 CashCurrency = Literal["SGD", "USD", "EUR", "GBP", "JPY", "AUD", "HKD", "CNY", "MYR"]
 CASH_CURRENCIES: tuple[str, ...] = get_args(CashCurrency)
-
-"""
-CPF statement configuration and constants.
-"""
 
 CPF_CURRENCY = "SGD"
 CPF_TIMEZONE = ZoneInfo("Asia/Singapore")
@@ -273,10 +253,6 @@ CPF_CODES = {
     "WDL": "Withdrawal of CPF savings",
     "WIS": "Government Top-up: Workfare Income Supplement",
 }
-
-"""
-Forecast plan configuration and constants.
-"""
 
 FORECAST_TIMEZONE = ZoneInfo("Asia/Singapore")
 FORECAST_MAX_MONTHS_AHEAD = 600
