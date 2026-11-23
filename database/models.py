@@ -25,6 +25,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from config.config import CASH_CURRENCIES
+
 from .db import Base
 
 Amount = Numeric()
@@ -71,6 +73,10 @@ def _enum(cls: type[enum.Enum], name: str) -> Enum:
 
 def _currency_check(column: str) -> CheckConstraint:
     return CheckConstraint(f"{column} ~ '^[A-Z]{{3}}$'", name=f"{column}_iso")
+
+
+def _quoted(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
 
 
 class Timestamped:
@@ -157,19 +163,16 @@ class CashAccount(Timestamped, Base):
     from_user_id: Mapped[str] = mapped_column(
         String(100), ForeignKey("users.user_id")
     )
-    institution: Mapped[str] = mapped_column(String(100))
     label: Mapped[str] = mapped_column(String(100))
     balance: Mapped[Decimal] = mapped_column(Amount)
     currency: Mapped[str] = mapped_column(CHAR(3))
-    interest_rate: Mapped[Decimal | None] = mapped_column(Amount)
 
     __table_args__ = (
-        UniqueConstraint("from_user_id", "institution", "label"),
+        UniqueConstraint("from_user_id", "label"),
         CheckConstraint("balance >= 0", name="balance_non_negative"),
         CheckConstraint(
-            "interest_rate >= 0 AND interest_rate <= 100", name="interest_rate_range"
+            f"currency IN ({_quoted(CASH_CURRENCIES)})", name="currency_allowed"
         ),
-        _currency_check("currency"),
     )
 
 
@@ -226,6 +229,25 @@ class CpfTransaction(Timestamped, Base):
         CheckConstraint(
             "EXTRACT(DAY FROM contribution_month) = 1",
             name="contribution_month_first_day",
+        ),
+    )
+
+
+class ForecastPlan(Timestamped, Base):
+    __tablename__ = "forecast_plans"
+
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), primary_key=True
+    )
+    gross_income: Mapped[Decimal] = mapped_column(Amount)
+    end_month: Mapped[date] = mapped_column(Date)
+    remainder_destination_id: Mapped[str | None] = mapped_column(String(64))
+    destinations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+    __table_args__ = (
+        CheckConstraint("gross_income >= 0", name="gross_income_non_negative"),
+        CheckConstraint(
+            "EXTRACT(DAY FROM end_month) = 1", name="end_month_first_day"
         ),
     )
 

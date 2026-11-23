@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 
 from api.deps import CurrentUser, SessionFactory
 from api.schemas.cpf import CodeQuery, CpfStatementUpload
+from cpf.rates import CPF_RATES, CpfRates
 from cpf.service import (
     CpfBalancesView,
     CpfStatementNotFoundError,
@@ -55,6 +56,11 @@ def read_balances(user: CurrentUser, session_factory: SessionFactory) -> CpfBala
             return get_balances(session, user.user_id)
     except CpfStatementNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+@router.get("/rates")
+def read_rates(user: CurrentUser) -> CpfRates:
+    return CPF_RATES
 
 
 @router.get("/transactions")
