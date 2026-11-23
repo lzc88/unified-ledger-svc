@@ -1,8 +1,8 @@
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from config.config import (
@@ -13,7 +13,7 @@ from config.config import (
     CONFIG_MASK_MIN_LENGTH_TO_REVEAL,
     CONFIG_MASK_VISIBLE_CHARS,
     CPF_TIMEZONE,
-    INTEGRATION_KEYS,
+    OTHER_RELIEFS_MAX,
     ConfigKey,
 )
 from database.models import UserConfig
@@ -26,10 +26,6 @@ class UnknownConfigKeyError(Exception):
 
 
 class ConfigNotSetError(Exception):
-    pass
-
-
-class ConfigMissingError(Exception):
     pass
 
 
@@ -82,52 +78,19 @@ def delete_config(session: Session, user_id: str, key: str) -> None:
     session.delete(row)
 
 
-def integration_rows(session: Session, user_id: str) -> dict[str, UserConfig]:
-    return {
-        row.config_key: row
-        for row in _rows(session, user_id)
-        if row.config_key in INTEGRATION_KEYS
-    }
+def read_config(session: Session, user_id: str, key: str) -> str | None:
+    _require_known(key)
 
+    row = session.get(UserConfig, (user_id, key))
+    if row is None:
+        return None
 
-def set_integration_value(
-    session: Session, user_id: str, key: str, value: str
-) -> UserConfig:
-    _require_integration(key)
-    return _store(session, user_id, key, value)
-
-
-def delete_integration_values(
-    session: Session, user_id: str, keys: Collection[str]
-) -> None:
-    for key in keys:
-        _require_integration(key)
-
-    session.execute(
-        delete(UserConfig).where(
-            UserConfig.from_user_id == user_id, UserConfig.config_key.in_(keys)
-        )
-    )
-
-
-def resolve(session: Session, user_id: str) -> dict[str, str]:
-    values = {}
-    for key, row in integration_rows(session, user_id).items():
-        try:
-            values[key] = decrypt(row.encrypted_value)
-        except UndecryptableValueError:
-            raise ConfigUnreadableError(
-                f"stored {key} can't be decrypted; edit the broker under my investments"
-            ) from None
-
-    return values
-
-
-def require(values: Mapping[str, str], keys: Collection[str], name: str) -> None:
-    if any(key not in values for key in keys):
-        raise ConfigMissingError(
-            f"{name} is not connected: add it under my investments"
-        )
+    try:
+        return decrypt(row.encrypted_value)
+    except UndecryptableValueError:
+        raise ConfigUnreadableError(
+            f"stored {key} can't be decrypted; set it again under settings"
+        ) from None
 
 
 def display(encrypted_value: str, secret: bool) -> str:
@@ -169,19 +132,26 @@ def _validate_birth_year(value: str) -> None:
         raise InvalidConfigValueError("birth year: enter a year like 1994.")
 
 
+def _validate_other_reliefs(value: str) -> None:
+    if not (
+        value.isascii()
+        and value.isdigit()
+        and int(value) <= OTHER_RELIEFS_MAX
+    ):
+        raise InvalidConfigValueError(
+            "other tax reliefs: enter a whole number of dollars, like 5000."
+        )
+
+
 _VALIDATORS: dict[str, Callable[[str], None]] = {
     "BIRTH_YEAR": _validate_birth_year,
+    "OTHER_RELIEFS": _validate_other_reliefs,
 }
 
 
 def _require_known(key: str) -> None:
     if key not in CONFIG_KEYS:
         raise UnknownConfigKeyError(f"unknown config key: {key}")
-
-
-def _require_integration(key: str) -> None:
-    if key not in INTEGRATION_KEYS:
-        raise UnknownConfigKeyError(f"unknown integration key: {key}")
 
 
 def _entry(key: str, row: UserConfig | None) -> ConfigEntry:

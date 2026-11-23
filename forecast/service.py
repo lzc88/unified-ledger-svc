@@ -44,6 +44,7 @@ def replace_plan(session: Session, user_id: str, plan: ForecastPlanIn) -> Foreca
     row.end_month = month_start(plan.end_month)
     row.remainder_destination_id = plan.remainder_destination_id
     row.destinations = [d.model_dump(mode="json") for d in plan.destinations]
+    row.rates = dict(plan.rates)
     row.updated_at = func.now()
 
     session.flush()
@@ -56,9 +57,9 @@ def _require_owned_accounts(
     session: Session, user_id: str, destinations: Sequence[ForecastDestination]
 ) -> None:
     linked = {
-        index: d.cash_account_id
+        index: uuid.UUID(d.target_id)
         for index, d in enumerate(destinations)
-        if d.cash_account_id is not None
+        if d.source == "cash_account" and d.target_id is not None
     }
     if not linked:
         return
@@ -84,6 +85,7 @@ def _view(row: ForecastPlan) -> ForecastPlanView:
             "end_month": row.end_month.strftime("%Y-%m"),
             "remainder_destination_id": row.remainder_destination_id,
             "destinations": row.destinations,
+            "rates": row.rates,
             "updated_at": row.updated_at,
         }
     )

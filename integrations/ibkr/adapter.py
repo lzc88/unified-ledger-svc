@@ -1,23 +1,28 @@
-from collections.abc import Iterable, Mapping
-from datetime import date
+from collections.abc import Mapping
 
-from config.config import IBKR_CONFIG_KEYS, IBKR_FLEX_TIMEZONE
-from integrations.base import MappingResult
+from config.config import (
+    IBKR_CREDENTIAL_KEYS,
+    IBKR_FLEX_QUERY_ID_CREDENTIAL,
+    IBKR_FLEX_TIMEZONE,
+    IBKR_FLEX_TOKEN_CREDENTIAL,
+)
+from integrations.base import Snapshot
 
-from .flex import fetch_documents
-from .mapping import map_statements
+from .flex import fetch_document
+from .mapping import map_snapshot
 
 
 class IbkrAdapter:
     broker_id = "IBKR"
     broker_name = "Interactive Brokers"
     timezone = IBKR_FLEX_TIMEZONE
-    config_keys = IBKR_CONFIG_KEYS
+    credential_keys = IBKR_CREDENTIAL_KEYS
 
-    def fetch(self, start: date, end: date, config: Mapping[str, str]) -> list[bytes]:
-        return fetch_documents(
-            config["IBKR_FLEX_TOKEN"], config["IBKR_FLEX_QUERY_ID"], start, end
+    def fetch_snapshot(self, credentials: Mapping[str, str]) -> Snapshot:
+
+        document = fetch_document(
+            credentials[IBKR_FLEX_TOKEN_CREDENTIAL],
+            credentials[IBKR_FLEX_QUERY_ID_CREDENTIAL],
         )
 
-    def map(self, documents: Iterable[bytes]) -> MappingResult:
-        return map_statements(documents)
+        return map_snapshot(document)

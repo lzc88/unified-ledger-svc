@@ -13,17 +13,12 @@ from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL, make_url
 
-"""
-IBKR Flex Web Service API configuration and constants.
-"""
-
 IBKR_FLEX_SEND_REQUEST_URL = (
     "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest"
 )
 IBKR_FLEX_API_VERSION = "3"
 IBKR_FLEX_USER_AGENT = "investment-tracker/0.1 (python-httpx2)"
 IBKR_FLEX_HTTP_TIMEOUT_SECONDS = 60.0
-IBKR_FLEX_MAX_WINDOW_DAYS = 365
 IBKR_FLEX_RETRYABLE_CODES = frozenset(
     {"1001", "1004", "1005", "1006", "1007", "1008", "1009", "1018", "1019", "1021"}
 )
@@ -34,11 +29,19 @@ IBKR_FLEX_POLL_INTERVAL = 5.0
 IBKR_FLEX_MAX_ATTEMPTS = 20
 
 IBKR_FLEX_TIMEZONE = ZoneInfo("America/New_York")
-IBKR_FLEX_DATE_FORMATS = ("%Y%m%d", "%Y-%m-%d")
-IBKR_FLEX_TIME_FORMATS = ("%H%M%S", "%H:%M:%S")
 IBKR_SUB_CATEGORY_TO_LISTING_CATEGORY = {
     "ETF": "ETF",
     "COMMON": "STOCK",
+}
+YAHOO_EXCHANGE_TO_EXCH_CODES = {
+    "NMS": frozenset({"UW", "UQ", "UR"}),
+    "NGM": frozenset({"UW", "UQ", "UR"}),
+    "NCM": frozenset({"UW", "UQ", "UR"}),
+    "NAS": frozenset({"UW", "UQ", "UR"}),
+    "NYQ": frozenset({"UN"}),
+    "PCX": frozenset({"UP"}),
+    "ASE": frozenset({"UA"}),
+    "BTS": frozenset({"UF"}),
 }
 IBKR_LISTING_EXCHANGE_TO_EXCH_CODES = {
     "NASDAQ": frozenset({"UW", "UQ", "UR"}),
@@ -62,9 +65,22 @@ IBKR_LISTING_EXCHANGE_TO_EXCH_CODES = {
     "TSEJ": frozenset({"JT"}),
 }
 
-"""
-OpenFIGI API configuration and constants.
-"""
+WEBULL_REGION = "sg"
+WEBULL_API_HOST = os.environ.get("WEBULL_API_HOST")
+WEBULL_HTTP_TIMEOUT_SECONDS = 30
+WEBULL_CONNECT_TIMEOUT_SECONDS = 10
+WEBULL_TOKEN_STATUSES = ("PENDING", "NORMAL", "INVALID", "EXPIRED")
+WEBULL_TOKEN_NORMAL = "NORMAL"
+WEBULL_INSTRUMENT_TYPE_TO_LISTING_CATEGORY = {
+    "EQUITY": "STOCK",
+    "STOCK": "STOCK",
+    "ETF": "ETF",
+}
+WEBULL_PRIMARY_EXCHANGE_LOOKUP_CURRENCIES = frozenset({"USD"})
+WEBULL_CURRENCY_TO_EXCH_CODES = {
+    "HKD": frozenset({"HK"}),
+    "SGD": frozenset({"SP"}),
+}
 
 OPENFIGI_MAPPING_URL = "https://api.openfigi.com/v3/mapping"
 OPENFIGI_HTTP_TIMEOUT_SECONDS = 30.0
@@ -75,7 +91,18 @@ OPENFIGI_KEYED_REQUEST_INTERVAL = 6.0 / 25
 OPENFIGI_RATE_LIMIT_BACKOFF = 60.0
 OPENFIGI_MAX_ATTEMPTS = 3
 
-SYNC_REFRESH_OVERLAP_DAYS = 7
+SNAPSHOT_TIMEZONE = ZoneInfo("Asia/Singapore")
+
+SYNC_TIMEZONE = ZoneInfo("Asia/Singapore")
+SYNC_DAILY_HOUR = 6
+SYNC_DAILY_MINUTE = 0
+SYNC_MISFIRE_GRACE_SECONDS = 3600
+SYNC_SCHEDULER_ENABLED = os.environ.get("APP_ENV", "local") != "test"
+SYNC_INTERRUPTED_ERROR = "interrupted by server restart"
+SYNC_INTERNAL_ERROR = "internal error; see server logs"
+SYNC_STALE_AFTER = timedelta(minutes=30)
+SYNC_STALE_ERROR = "sync stopped responding; start it again"
+SYNC_SCHEDULER_LOCK_ID = 4242001
 
 AUTH_COOKIE_NAME = "session"
 AUTH_JWT_ALGORITHM = "HS256"
@@ -100,15 +127,41 @@ CONFIG_KEYS = {
         secret=False,
         required=False,
     ),
+    "OTHER_RELIEFS": ConfigKey(
+        group="profile",
+        label="Other tax reliefs",
+        description=(
+            "yearly reliefs beyond cpf and earned income relief, e.g. srs or parent relief. "
+            "used for the tax estimate in the forecast."
+        ),
+        secret=False,
+        required=False,
+    ),
+    "OPENFIGI_API_KEY": ConfigKey(
+        group="integrations",
+        label="OpenFIGI API key",
+        description="optional; raises the openfigi rate limit when mapping broker assets.",
+        secret=True,
+        required=False,
+    ),
 }
 BIRTH_YEAR_MIN = 1900
+OTHER_RELIEFS_MAX = 80000
 
-IBKR_FLEX_TOKEN_KEY = "IBKR_FLEX_TOKEN"
-IBKR_FLEX_QUERY_ID_KEY = "IBKR_FLEX_QUERY_ID"
 OPENFIGI_API_KEY_KEY = "OPENFIGI_API_KEY"
-IBKR_CONFIG_KEYS = (IBKR_FLEX_TOKEN_KEY, IBKR_FLEX_QUERY_ID_KEY)
-IBKR_CONNECTION_KEYS = (*IBKR_CONFIG_KEYS, OPENFIGI_API_KEY_KEY)
-INTEGRATION_KEYS = frozenset(IBKR_CONNECTION_KEYS)
+IBKR_FLEX_TOKEN_CREDENTIAL = "flex_token"
+IBKR_FLEX_QUERY_ID_CREDENTIAL = "flex_query_id"
+IBKR_CREDENTIAL_KEYS = (IBKR_FLEX_TOKEN_CREDENTIAL, IBKR_FLEX_QUERY_ID_CREDENTIAL)
+WEBULL_APP_KEY_CREDENTIAL = "app_key"
+WEBULL_APP_SECRET_CREDENTIAL = "app_secret"
+WEBULL_ACCESS_TOKEN_CREDENTIAL = "access_token"
+WEBULL_TOKEN_STATUS_CREDENTIAL = "token_status"
+WEBULL_CREDENTIAL_KEYS = (
+    WEBULL_APP_KEY_CREDENTIAL,
+    WEBULL_APP_SECRET_CREDENTIAL,
+    WEBULL_ACCESS_TOKEN_CREDENTIAL,
+    WEBULL_TOKEN_STATUS_CREDENTIAL,
+)
 
 CONFIG_VALUE_MAX_LENGTH = 512
 CONFIG_MASK_CHAR = "•"
@@ -116,25 +169,12 @@ CONFIG_MASK_LENGTH = 8
 CONFIG_MASK_VISIBLE_CHARS = 4
 CONFIG_MASK_MIN_LENGTH_TO_REVEAL = 12
 
-API_JOBS_DEFAULT_LIMIT = 20
-API_JOBS_MAX_LIMIT = 100
-
-LEDGER_DEFAULT_LIMIT = 50
-LEDGER_MAX_LIMIT = 200
-
 PORTFOLIO_DEFAULT_CURRENCY = "SGD"
 PORTFOLIO_DUST = Decimal("0.000001")
-
-"""
-Cash account configuration and constants.
-"""
+PORTFOLIO_HISTORY_LOOKBACK_DAYS = 7
 
 CashCurrency = Literal["SGD", "USD", "EUR", "GBP", "JPY", "AUD", "HKD", "CNY", "MYR"]
 CASH_CURRENCIES: tuple[str, ...] = get_args(CashCurrency)
-
-"""
-CPF statement configuration and constants.
-"""
 
 CPF_CURRENCY = "SGD"
 CPF_TIMEZONE = ZoneInfo("Asia/Singapore")
@@ -214,15 +254,13 @@ CPF_CODES = {
     "WIS": "Government Top-up: Workfare Income Supplement",
 }
 
-"""
-Forecast plan configuration and constants.
-"""
-
 FORECAST_TIMEZONE = ZoneInfo("Asia/Singapore")
 FORECAST_MAX_MONTHS_AHEAD = 600
 FORECAST_MAX_DESTINATIONS = 30
 FORECAST_DESTINATION_ID_MAX_LENGTH = 64
 FORECAST_DESTINATION_NAME_MAX_LENGTH = 60
+FORECAST_TARGET_ID_MAX_LENGTH = 64
+FORECAST_MAX_RATES = 200
 
 MARKET_CACHE_TTL_SECONDS = 300
 MARKET_EXCH_CODE_SUFFIXES = {

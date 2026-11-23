@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -20,6 +21,8 @@ from config.config import (
     FORECAST_DESTINATION_NAME_MAX_LENGTH,
     FORECAST_MAX_DESTINATIONS,
     FORECAST_MAX_MONTHS_AHEAD,
+    FORECAST_MAX_RATES,
+    FORECAST_TARGET_ID_MAX_LENGTH,
     FORECAST_TIMEZONE,
 )
 
@@ -34,20 +37,24 @@ DestinationName = Annotated[
         max_length=FORECAST_DESTINATION_NAME_MAX_LENGTH,
     ),
 ]
+TargetId = Annotated[
+    str, StringConstraints(min_length=1, max_length=FORECAST_TARGET_ID_MAX_LENGTH)
+]
 Money = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
 
 Kind = Literal["investment", "cash", "expense"]
 Mode = Literal["amount", "percent"]
-Source = Literal["manual", "portfolio", "cash_account"]
+Source = Literal["manual", "holding", "broker_cash", "cash_account"]
 
 ALLOWED_SOURCES: dict[str, frozenset[str]] = {
-    "investment": frozenset({"manual", "portfolio"}),
+    "investment": frozenset({"manual", "holding", "broker_cash"}),
     "cash": frozenset({"manual", "cash_account"}),
     "expense": frozenset({"manual"}),
 }
 
 END_MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+RATE_KEY_PATTERN = re.compile(r"(asset|broker_cash|cash_account|destination):.{1,64}")
 
 
 def _invalid(message: str) -> PydanticCustomError:
@@ -56,6 +63,13 @@ def _invalid(message: str) -> PydanticCustomError:
 
 def _duplicates(values: list[str]) -> list[str]:
     return [value for value, count in Counter(values).items() if count > 1]
+
+
+def _cash_account_id(value: str | None) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        raise _invalid("target_id: must be a uuid when source is cash_account.") from None
 
 
 def month_start(value: str) -> date:
@@ -82,31 +96,33 @@ class ForecastDestination(BaseModel):
     kind: Kind
     mode: Mode
     value: Money
-    rate: Percent | None = None
     source: Source
-    cash_account_id: uuid.UUID | None = None
+    target_id: TargetId | None = None
     starting_balance: Money | None = None
+
+    @property
+    def is_manual_asset(self) -> bool:
+        return self.source == "manual" and self.kind != "expense"
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
         if self.mode == "percent" and self.value > 100:
             raise _invalid("value: a percent must be at most 100.")
 
-        if self.kind == "expense" and self.rate is not None:
-            raise _invalid("rate: must be null for an expense.")
-
         if self.source not in ALLOWED_SOURCES[self.kind]:
             raise _invalid(f"source: {self.source} is not allowed for {self.kind}.")
 
-        linked = self.source == "cash_account"
-        if linked and self.cash_account_id is None:
-            raise _invalid("cash_account_id: required when source is cash_account.")
+        manual = self.source == "manual"
+        if not manual and self.target_id is None:
+            raise _invalid(f"target_id: required when source is {self.source}.")
 
-        if not linked and self.cash_account_id is not None:
-            raise _invalid("cash_account_id: must be null unless source is cash_account.")
+        if manual and self.target_id is not None:
+            raise _invalid("target_id: must be null when source is manual.")
 
-        takes_balance = self.source == "manual" and self.kind != "expense"
-        if not takes_balance and self.starting_balance is not None:
+        if self.source == "cash_account":
+            self.target_id = str(_cash_account_id(self.target_id))
+
+        if not self.is_manual_asset and self.starting_balance is not None:
             raise _invalid(
                 "starting_balance: only allowed for a manual investment or cash destination."
             )
@@ -121,6 +137,7 @@ class ForecastPlanBase(BaseModel):
     end_month: str
     remainder_destination_id: DestinationId | None = None
     destinations: list[ForecastDestination] = Field(max_length=FORECAST_MAX_DESTINATIONS)
+    rates: dict[str, Percent] = Field(default_factory=dict)
 
     @field_validator("end_month")
     @classmethod
@@ -137,14 +154,39 @@ class ForecastPlanBase(BaseModel):
         if names := _duplicates([d.name.casefold() for d in destinations]):
             raise _invalid(f"destination names must be unique: {', '.join(names)}.")
 
-        if sum(d.source == "portfolio" for d in destinations) > 1:
-            raise _invalid("only one destination can use the portfolio.")
-
-        accounts = [str(d.cash_account_id) for d in destinations if d.cash_account_id]
-        if _duplicates(accounts):
-            raise _invalid("each cash account can only be linked once.")
-
         return destinations
+
+    @field_validator("rates")
+    @classmethod
+    def _rates_well_formed(cls, rates: dict[str, float]) -> dict[str, float]:
+        if len(rates) > FORECAST_MAX_RATES:
+            raise _invalid(f"rates: {FORECAST_MAX_RATES} entries at most.")
+
+        if malformed := [key for key in rates if not RATE_KEY_PATTERN.fullmatch(key)]:
+            raise _invalid(f"rates: unknown keys: {', '.join(malformed)}.")
+
+        return rates
+
+    @field_validator("rates")
+    @classmethod
+    def _rates_match_destinations(
+        cls, rates: dict[str, float], info: ValidationInfo
+    ) -> dict[str, float]:
+        destinations: list[ForecastDestination] | None = info.data.get("destinations")
+        if destinations is None:
+            return rates
+
+        manual = {f"destination:{d.id}" for d in destinations if d.is_manual_asset}
+        unmatched = [
+            key for key in rates if key.startswith("destination:") and key not in manual
+        ]
+        if unmatched:
+            raise _invalid(
+                "rates: must name a manual investment or cash destination: "
+                f"{', '.join(unmatched)}."
+            )
+
+        return rates
 
     @model_validator(mode="after")
     def _remainder_exists(self) -> Self:

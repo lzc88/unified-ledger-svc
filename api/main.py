@@ -7,20 +7,44 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from api.deps import get_session_factory
+from api.deps import get_openfigi_factory, get_session_factory
 from api.router import api_router
 from api.routes.integrations.sync import SyncConflictError
-from integrations.sync import fail_interrupted_jobs
+from config.config import SYNC_SCHEDULER_ENABLED
+from database.db import engine
+from integrations.scheduler import (
+    acquire_scheduler_lock,
+    create_scheduler,
+    release_scheduler_lock,
+)
+from integrations.sync import fail_interrupted_syncs
 
 log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    with get_session_factory().begin() as session:
-        if count := fail_interrupted_jobs(session):
-            log.warning("marked %d interrupted sync job(s) as failed", count)
-    yield
+    session_factory = get_session_factory()
+    lock = acquire_scheduler_lock(engine) if SYNC_SCHEDULER_ENABLED else None
+    scheduler = None
+
+    try:
+        if lock is not None:
+            with session_factory.begin() as session:
+                if count := fail_interrupted_syncs(session):
+                    log.warning("marked %d interrupted sync(s) as failed", count)
+
+            scheduler = create_scheduler(session_factory, get_openfigi_factory())
+            scheduler.start()
+        elif SYNC_SCHEDULER_ENABLED:
+            log.info("another process owns the sync scheduler")
+
+        yield
+    finally:
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
+        if lock is not None:
+            release_scheduler_lock(lock)
 
 
 app = FastAPI(title="unified-ledger-svc", lifespan=lifespan)

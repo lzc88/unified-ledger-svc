@@ -1,35 +1,27 @@
-import uuid
-from datetime import date, datetime
-from typing import Any, Self
+from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict
 
-from database.models import SyncKind, SyncStatus
-
-class BackfillRequest(BaseModel):
-    start: date
-    end: date
-
-    @model_validator(mode="after")
-    def _ordered(self) -> Self:
-        if self.start > self.end:
-            raise ValueError("start must not be after end")
-        return self
+from database.models import BrokerConnection, SyncStatus
+from integrations.sync import sync_summary
 
 
-class Job(BaseModel):
+class SkippedPosition(BaseModel):
+    section: str
+    id: str | None
+    symbol: str | None
+    reason: str
+
+
+class SyncState(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    job_id: uuid.UUID
-    user_id: str = Field(validation_alias="from_user_id")
-    broker_id: str = Field(validation_alias="from_broker_id")
-    kind: SyncKind
-    status: SyncStatus
-    start_date: date
-    end_date: date
-    inserted: dict[str, int] | None
-    skipped: list[dict[str, Any]] | None
+    broker_id: str
+    status: SyncStatus | None
+    last_synced_at: datetime | None
     error: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
+    skipped: list[SkippedPosition]
+
+
+def sync_state(connection: BrokerConnection | None, broker_id: str) -> SyncState:
+    return SyncState.model_validate(sync_summary(connection, broker_id))

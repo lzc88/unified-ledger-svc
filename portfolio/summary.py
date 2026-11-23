@@ -1,22 +1,22 @@
-from collections.abc import Iterable
-from datetime import UTC, date, datetime
+from bisect import bisect_right
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from pydantic import BaseModel
 
-from config.config import PORTFOLIO_DUST
+from config.config import PORTFOLIO_DUST, PORTFOLIO_HISTORY_LOOKBACK_DAYS
+from database.models import ListingCategory
 
-from .ledger import ZERO, Event, Holding, Snapshot, replay
-from .market import (
-    MarketData,
-    MarketDataError,
-    Quote,
-    fx_symbol,
-    yahoo_symbol,
-)
+from .market import MarketData, MarketDataError, Quote, fx_symbol, yahoo_symbol
+from .snapshots import AccountSnapshot, Holding
+
+ZERO = Decimal(0)
 
 
-class NoActivityError(Exception):
+class NoSnapshotsError(Exception):
     pass
 
 
@@ -27,17 +27,17 @@ class Position(BaseModel):
     category: str
     exchange: str
     currency: str
-    open: bool
+    brokers: list[str]
     quantity: float
     avg_cost: float | None
-    cost_basis: float
+    cost_basis: float | None
     price: float | None
     market_value: float | None
     unrealised: float | None
-    realised: float
 
 
-class Balance(BaseModel):
+class CashBalance(BaseModel):
+    broker_id: str
     currency: str
     amount: float
     value: float | None
@@ -45,149 +45,237 @@ class Balance(BaseModel):
 
 class Totals(BaseModel):
     value: float | None
-    net_capital: float | None
     cash: float | None
     market_value: float | None
     cost_basis: float | None
     unrealised: float | None
-    realised: float | None
 
 
 class HistoryPoint(BaseModel):
-    month: str
+    date: date
     value: float | None
-    net_capital: float | None
 
 
 class PortfolioSummary(BaseModel):
     user_id: str
     currency: str
     as_of: datetime
+    snapshot_date: date
     fx_rates: dict[str, float]
     totals: Totals
     positions: list[Position]
-    cash: list[Balance]
-    deposits: list[Balance]
-    withdrawals: list[Balance]
-    fees: list[Balance]
+    cash: list[CashBalance]
     history: list[HistoryPoint]
     warnings: list[str]
 
 
 Rate = Decimal | None
+AccountKey = tuple[str, str]
+Closes = dict[str, tuple[list[date], list[Decimal]]]
+
+
+@dataclass(frozen=True)
+class Asset:
+    asset_id: str
+    ticker: str
+    category: ListingCategory
+    exchange: str
+    currency: str
+
+
+@dataclass
+class Merged:
+    asset: Asset
+    quantity: Decimal = ZERO
+    cost_basis: Decimal = ZERO
+    brokers: set[str] = field(default_factory=set)
+    currencies: set[str] = field(default_factory=set)
+    costs: dict[str, Decimal] = field(default_factory=dict)
 
 
 def build_summary(
     user_id: str,
-    events: Iterable[Event],
+    snapshots: Sequence[AccountSnapshot],
     market: MarketData,
     currency: str,
     today: date,
 ) -> PortfolioSummary:
-    book, snapshots = replay(events)
     if not snapshots:
-        raise NoActivityError(f"no ledger activity for user {user_id!r}")
+        raise NoSnapshotsError(f"no broker snapshots for user {user_id!r}")
+
     warnings: list[str] = []
-    holdings = book.holdings
-    symbols = _yahoo_symbols(holdings, warnings)
-    capital_currencies = set(book.deposits) | set(book.withdrawals)
+    ordered = sorted(snapshots, key=lambda s: (s.snapshot_date, s.broker_id, s.account_id))
+    latest = _latest(ordered, warnings)
+    snapshot_date = max(s.snapshot_date for s in latest.values())
+    _warn_stale(latest, snapshot_date, warnings)
+
+    merged = _merge(latest.values(), warnings)
+    assets = _assets(ordered, merged)
+    symbols = _yahoo_symbols(assets, warnings)
+
+    cash_currencies = {c for s in ordered for c in s.cash}
+    cost_currencies = {c for m in merged.values() for c in m.costs}
     foreign = (
-        set(book.cash) | capital_currencies | {h.currency for h in holdings.values()}
+        cash_currencies | cost_currencies | {a.currency for a in assets.values()}
     ) - {currency}
     fx_symbols = {c: fx_symbol(c, currency) for c in foreign}
-    open_holdings = [h for h in holdings.values() if h.is_open]
 
     quotes = market.quotes(set(symbols.values()) | set(fx_symbols.values()))
-    priceable = _priceable(holdings, symbols, quotes, warnings)
-    fx: dict[str, Rate] = {currency: Decimal(1)}
-    for c, s in sorted(fx_symbols.items()):
-        fx[c] = quotes[s].price if s in quotes else None
-        if fx[c] is None:
-            warnings.append(
-                f"no {c}/{currency} rate from Yahoo ({s}); {c} amounts are unconverted"
-            )
-    prices = {
-        h.asset_id: _price(priceable.get(h.asset_id), quotes, warnings)
-        for h in open_holdings
-    }
-    if capital_currencies - {currency}:
-        warnings.append(
-            f"deposits in other currencies are converted to {currency} at today's rate"
-        )
+    priceable = _priceable(assets, symbols, quotes, warnings)
+    fx = _live_fx(currency, fx_symbols, quotes, warnings)
+    prices = {a: _price(priceable.get(a), quotes, warnings) for a in merged}
 
     market_value = _sum(
-        _mul(h.quantity, prices[h.asset_id], fx[h.currency]) for h in open_holdings
+        _mul(m.quantity, prices[a], fx.get(m.asset.currency)) for a, m in merged.items()
     )
-    cost_basis = _sum(_mul(h.cost, fx[h.currency]) for h in open_holdings)
-    cash_value = _sum(_mul(b, fx[c]) for c, b in book.cash.items())
+    costs = {a: _cost(m, fx) for a, m in merged.items()}
+    cost_basis = _sum(_mul(costs[a], fx.get(m.asset.currency)) for a, m in merged.items())
+    amounts = _cash_amounts(latest.values())
+    cash_value = _sum(_mul(a, fx.get(c)) for (_, c), a in amounts.items())
+    value = _add(cash_value, market_value)
+
     totals = Totals(
-        value=_float(_add(cash_value, market_value)),
-        net_capital=_float(
-            _sum(
-                _mul(book.deposits[c] - book.withdrawals[c], fx[c])
-                for c in capital_currencies
-            )
-        ),
+        value=_float(value),
         cash=_float(cash_value),
         market_value=_float(market_value),
         cost_basis=_float(cost_basis),
         unrealised=_float(_sub(market_value, cost_basis)),
-        realised=_float(
-            _sum(_mul(h.realised, fx[h.currency]) for h in holdings.values())
-        ),
     )
 
     positions = [
-        _position(h, symbols.get(a), prices.get(a)) for a, h in holdings.items()
+        _position(m, symbols.get(a), prices[a], costs[a]) for a, m in merged.items()
     ]
-    positions.sort(key=lambda p: (not p.open, -(p.market_value or 0), p.symbol))
+    converted = {
+        a: _mul(m.quantity, prices[a], fx.get(m.asset.currency)) or ZERO
+        for a, m in merged.items()
+    }
+    positions.sort(key=lambda p: (-converted[p.asset_id], p.symbol))
+
+    history = _history(
+        ordered,
+        assets,
+        priceable,
+        fx_symbols,
+        currency,
+        market,
+        max(today, snapshot_date),
+        value,
+        warnings,
+    )
+
     return PortfolioSummary(
         user_id=user_id,
         currency=currency,
         as_of=datetime.now(UTC),
+        snapshot_date=snapshot_date,
         fx_rates={c: float(r) for c, r in fx.items() if r is not None},
         totals=totals,
         positions=positions,
-        cash=_balances(book.cash, fx),
-        deposits=_balances(book.deposits, fx),
-        withdrawals=_balances(book.withdrawals, fx),
-        fees=_balances(book.fees, fx),
-        history=_history(
-            snapshots,
-            holdings,
-            priceable,
-            currency,
-            fx_symbols,
-            market,
-            today,
-            prices,
-            fx,
-            warnings,
-        ),
+        cash=_balances(amounts, fx),
+        history=history,
         warnings=warnings,
     )
 
 
-def _yahoo_symbols(holdings: dict[str, Holding], warnings: list[str]) -> dict[str, str]:
+def _latest(
+    ordered: Sequence[AccountSnapshot], warnings: list[str]
+) -> dict[AccountKey, AccountSnapshot]:
+    newest = {snapshot.broker_id: snapshot.snapshot_date for snapshot in ordered}
+
+    latest: dict[AccountKey, AccountSnapshot] = {}
+    last_seen: dict[AccountKey, date] = {}
+    for snapshot in ordered:
+        key = (snapshot.broker_id, snapshot.account_id)
+        last_seen[key] = snapshot.snapshot_date
+        if snapshot.snapshot_date == newest[snapshot.broker_id]:
+            latest[key] = snapshot
+
+    for (broker_id, account_id), seen in sorted(last_seen.items()):
+        if seen < newest[broker_id]:
+            warnings.append(
+                f"{broker_id} account {account_id} has not been returned since "
+                f"{seen.isoformat()}; it is excluded"
+            )
+
+    return dict(sorted(latest.items()))
+
+
+def _warn_stale(
+    latest: dict[AccountKey, AccountSnapshot], snapshot_date: date, warnings: list[str]
+) -> None:
+    for (broker_id, account_id), snapshot in latest.items():
+        if snapshot.snapshot_date < snapshot_date:
+            warnings.append(
+                f"{broker_id} account {account_id} was last snapshotted on "
+                f"{snapshot.snapshot_date.isoformat()}"
+            )
+
+
+def _asset(holding: Holding) -> Asset:
+    return Asset(
+        asset_id=holding.asset_id,
+        ticker=holding.ticker,
+        category=holding.category,
+        exchange=holding.exchange,
+        currency=holding.currency,
+    )
+
+
+def _merge(
+    latest: Iterable[AccountSnapshot], warnings: list[str]
+) -> dict[str, Merged]:
+    merged: dict[str, Merged] = {}
+    for snapshot in latest:
+        for holding in snapshot.holdings:
+            entry = merged.setdefault(holding.asset_id, Merged(_asset(holding)))
+            entry.quantity += holding.quantity
+            entry.cost_basis += holding.cost_basis
+            entry.brokers.add(snapshot.broker_id)
+            entry.currencies.add(holding.currency)
+            entry.costs[holding.currency] = (
+                entry.costs.get(holding.currency, ZERO) + holding.cost_basis
+            )
+
+    for entry in merged.values():
+        if len(entry.currencies) > 1:
+            warnings.append(
+                f"{entry.asset.ticker} is held in {', '.join(sorted(entry.currencies))} "
+                f"across brokers; its cost basis is converted to {entry.asset.currency}"
+            )
+
+    return {a: m for a, m in sorted(merged.items()) if abs(m.quantity) >= PORTFOLIO_DUST}
+
+
+def _assets(
+    ordered: Sequence[AccountSnapshot], merged: dict[str, Merged]
+) -> dict[str, Asset]:
+    assets = {a: m.asset for a, m in merged.items()}
+    for snapshot in ordered:
+        for holding in snapshot.holdings:
+            assets.setdefault(holding.asset_id, _asset(holding))
+    return dict(sorted(assets.items()))
+
+
+def _yahoo_symbols(assets: dict[str, Asset], warnings: list[str]) -> dict[str, str]:
     symbols = {}
-    for asset_id, h in sorted(holdings.items()):
-        symbol = yahoo_symbol(h.ticker, h.exchange)
+    for asset_id, asset in assets.items():
+        symbol = yahoo_symbol(asset.ticker, asset.exchange)
         if symbol is None:
-            warnings.append(f"no Yahoo exchange for {h.ticker} on {h.exchange}")
+            warnings.append(f"no Yahoo exchange for {asset.ticker} on {asset.exchange}")
         else:
             symbols[asset_id] = symbol
     return symbols
 
 
 def _priceable(
-    holdings: dict[str, Holding],
+    assets: dict[str, Asset],
     symbols: dict[str, str],
     quotes: dict[str, Quote],
     warnings: list[str],
 ) -> dict[str, str]:
     priceable = {}
     for asset_id, symbol in symbols.items():
-        quote, currency = quotes.get(symbol), holdings[asset_id].currency
+        quote, currency = quotes.get(symbol), assets[asset_id].currency
         if quote is not None and quote.currency != currency:
             warnings.append(
                 f"{symbol} is quoted in {quote.currency} but trades in "
@@ -198,109 +286,197 @@ def _priceable(
     return priceable
 
 
+def _live_fx(
+    currency: str,
+    fx_symbols: dict[str, str],
+    quotes: dict[str, Quote],
+    warnings: list[str],
+) -> dict[str, Rate]:
+    fx: dict[str, Rate] = {currency: Decimal(1)}
+    for c, s in sorted(fx_symbols.items()):
+        fx[c] = quotes[s].price if s in quotes else None
+        if fx[c] is None:
+            warnings.append(
+                f"no {c}/{currency} rate from Yahoo ({s}); {c} amounts are unconverted"
+            )
+    return fx
+
+
 def _price(symbol: str | None, quotes: dict[str, Quote], warnings: list[str]) -> Rate:
     if symbol is None:
         return None
+
     quote = quotes.get(symbol)
     if quote is None:
         warnings.append(f"no live price from Yahoo for {symbol}")
         return None
+
     return quote.price
 
 
-def _position(h: Holding, symbol: str | None, price: Rate) -> Position:
-    value = _mul(h.quantity, price) if h.is_open else None
+def _cost(m: Merged, fx: dict[str, Rate]) -> Rate:
+    if set(m.costs) <= {m.asset.currency}:
+        return m.cost_basis
+
+    total = _sum(_mul(amount, fx.get(c)) for c, amount in m.costs.items())
+    rate = fx.get(m.asset.currency)
+    if total is None or not rate:
+        return None
+    return total / rate
+
+
+def _position(m: Merged, symbol: str | None, price: Rate, cost: Rate) -> Position:
+    value = _mul(m.quantity, price)
     return Position(
-        asset_id=h.asset_id,
-        symbol=h.ticker,
+        asset_id=m.asset.asset_id,
+        symbol=m.asset.ticker,
         yahoo_symbol=symbol,
-        category=h.category.value,
-        exchange=h.exchange,
-        currency=h.currency,
-        open=h.is_open,
-        quantity=float(h.quantity),
-        avg_cost=float(h.cost / h.quantity) if h.is_open else None,
-        cost_basis=float(h.cost),
+        category=m.asset.category.value,
+        exchange=m.asset.exchange,
+        currency=m.asset.currency,
+        brokers=sorted(m.brokers),
+        quantity=float(m.quantity),
+        avg_cost=None if cost is None else float(cost / m.quantity),
+        cost_basis=_float(cost),
         price=_float(price),
         market_value=_float(value),
-        unrealised=_float(_sub(value, h.cost)) if h.is_open else None,
-        realised=float(h.realised),
+        unrealised=_float(_sub(value, cost)),
     )
 
 
+def _cash_amounts(latest: Iterable[AccountSnapshot]) -> dict[tuple[str, str], Decimal]:
+    amounts: dict[tuple[str, str], Decimal] = defaultdict(lambda: ZERO)
+    for snapshot in latest:
+        for c, balance in snapshot.cash.items():
+            amounts[(snapshot.broker_id, c)] += balance
+    return amounts
+
+
+def _balances(
+    amounts: dict[tuple[str, str], Decimal], fx: dict[str, Rate]
+) -> list[CashBalance]:
+    return [
+        CashBalance(
+            broker_id=broker_id,
+            currency=c,
+            amount=float(amount),
+            value=_float(_mul(amount, fx.get(c))),
+        )
+        for (broker_id, c), amount in sorted(amounts.items())
+        if abs(amount) >= PORTFOLIO_DUST
+    ]
+
+
 def _history(
-    snapshots: list[Snapshot],
-    holdings: dict[str, Holding],
-    symbols: dict[str, str],
-    currency: str,
+    ordered: Sequence[AccountSnapshot],
+    assets: dict[str, Asset],
+    priceable: dict[str, str],
     fx_symbols: dict[str, str],
+    currency: str,
     market: MarketData,
-    today: date,
-    live_prices: dict[str, Rate],
-    live_fx: dict[str, Rate],
+    end: date,
+    live_value: Rate,
     warnings: list[str],
 ) -> list[HistoryPoint]:
-    start, current = snapshots[0].month, today.replace(day=1)
-    try:
-        closes = market.monthly_closes(
-            set(symbols.values()) | set(fx_symbols.values()), start
-        )
-    except MarketDataError as exc:
-        warnings.append(f"history is unpriced: {exc}")
-        closes = {}
+    start = ordered[0].snapshot_date
+    closes = _closes(
+        market,
+        set(priceable.values()) | set(fx_symbols.values()),
+        start,
+        end,
+        warnings,
+    )
 
-    by_month = {s.month: s for s in snapshots}
-    snapshot = snapshots[0]
+    by_date: dict[date, list[AccountSnapshot]] = defaultdict(list)
+    for snapshot in ordered:
+        by_date[snapshot.snapshot_date].append(snapshot)
+
+    state: dict[AccountKey, AccountSnapshot] = {}
     points = []
-    for month in _months(start, current):
-        snapshot = by_month.get(month, snapshot)
-        if month == current:
-            fx, prices = live_fx, live_prices
+    day = start
+    while day <= end:
+        batch = by_date.get(day, ())
+        synced = {snapshot.broker_id for snapshot in batch}
+        if synced:
+            state = {key: s for key, s in state.items() if key[0] not in synced}
+        for snapshot in batch:
+            state[(snapshot.broker_id, snapshot.account_id)] = snapshot
+
+        if day == end:
+            value = live_value
         else:
-            fx = {currency: Decimal(1)}
-            fx |= {c: closes.get(s, {}).get(month) for c, s in fx_symbols.items()}
-            prices = {
-                a: _close(closes, symbols.get(a), month) for a in snapshot.quantities
-            }
-        holdings_value = _sum(
-            _mul(q, prices.get(a), fx.get(holdings[a].currency))
-            for a, q in snapshot.quantities.items()
-        )
-        cash_value = _sum(_mul(b, fx.get(c)) for c, b in snapshot.cash.items())
-        points.append(
-            HistoryPoint(
-                month=month.strftime("%Y-%m"),
-                value=_float(_add(cash_value, holdings_value)),
-                net_capital=_float(
-                    _sum(_mul(v, fx.get(c)) for c, v in snapshot.net_capital.items())
-                ),
+            value = _day_value(
+                state.values(), assets, priceable, fx_symbols, currency, closes, day
             )
-        )
+
+        points.append(HistoryPoint(date=day, value=_float(value)))
+        day += timedelta(days=1)
+
     return points
 
 
-def _close(
-    closes: dict[str, dict[date, Decimal]], symbol: str | None, month: date
-) -> Rate:
-    if symbol is None:
+def _closes(
+    market: MarketData,
+    symbols: set[str],
+    start: date,
+    end: date,
+    warnings: list[str],
+) -> Closes:
+    if not symbols or start >= end:
+        return {}
+
+    lookback = start - timedelta(days=PORTFOLIO_HISTORY_LOOKBACK_DAYS)
+    try:
+        raw = market.daily_closes(symbols, lookback)
+    except MarketDataError as exc:
+        warnings.append(f"history is unpriced: {exc}")
+        return {}
+
+    closes = {}
+    for symbol, series in raw.items():
+        days = sorted(series)
+        closes[symbol] = (days, [series[d] for d in days])
+    return closes
+
+
+def _close_on(closes: Closes, symbol: str | None, day: date) -> Rate:
+    if symbol is None or symbol not in closes:
         return None
-    return closes.get(symbol, {}).get(month)
+
+    days, values = closes[symbol]
+    index = bisect_right(days, day)
+    return values[index - 1] if index else None
 
 
-def _months(start: date, end: date) -> list[date]:
-    months = []
-    while start <= end:
-        months.append(start)
-        start = date(start.year + start.month // 12, start.month % 12 + 1, 1)
-    return months
+def _day_value(
+    state: Iterable[AccountSnapshot],
+    assets: dict[str, Asset],
+    priceable: dict[str, str],
+    fx_symbols: dict[str, str],
+    currency: str,
+    closes: Closes,
+    day: date,
+) -> Rate:
+    def rate(c: str) -> Rate:
+        return Decimal(1) if c == currency else _close_on(closes, fx_symbols[c], day)
 
+    total = ZERO
+    for snapshot in state:
+        for holding in snapshot.holdings:
+            asset = assets[holding.asset_id]
+            price = _close_on(closes, priceable.get(holding.asset_id), day)
+            value = _mul(holding.quantity, price, rate(asset.currency))
+            if value is None:
+                return None
+            total += value
 
-def _balances(amounts: dict[str, Decimal], fx: dict[str, Rate]) -> list[Balance]:
-    return [
-        Balance(currency=c, amount=float(a), value=_float(_mul(a, fx.get(c))))
-        for c, a in sorted(amounts.items())
-        if abs(a) >= PORTFOLIO_DUST
-    ]
+        for c, balance in snapshot.cash.items():
+            value = _mul(balance, rate(c))
+            if value is None:
+                return None
+            total += value
+
+    return total
 
 
 def _mul(*values: Rate) -> Rate:
