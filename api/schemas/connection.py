@@ -8,7 +8,6 @@ from api.schemas.config import ConfigValue
 class IbkrConnectionUpdate(BaseModel):
     token: ConfigValue | None = None
     query_id: ConfigValue
-    openfigi_key: ConfigValue | None = None
 
 
 class IbkrConnection(BaseModel):
@@ -18,5 +17,4 @@ class IbkrConnection(BaseModel):
     connected: bool
     query_id: str | None
     token: str | None
-    openfigi_key: str | None
     updated_at: datetime | None

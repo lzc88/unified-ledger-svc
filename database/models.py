@@ -252,6 +252,18 @@ class ForecastPlan(Timestamped, Base):
     )
 
 
+class BrokerConnection(Timestamped, Base):
+    __tablename__ = "broker_connections"
+
+    from_user_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.user_id"), primary_key=True
+    )
+    from_broker_id: Mapped[str] = mapped_column(
+        String(100), ForeignKey("brokers.broker_id"), primary_key=True
+    )
+    credentials: Mapped[str] = mapped_column(Text)
+
+
 class Account(Timestamped, Base):
     __tablename__ = "accounts"
 
@@ -261,6 +273,13 @@ class Account(Timestamped, Base):
     )
     from_user_id: Mapped[str] = mapped_column(
         String(100), ForeignKey("users.user_id"), index=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["from_user_id", "from_broker_id"],
+            ["broker_connections.from_user_id", "broker_connections.from_broker_id"],
+        ),
     )
 
 
@@ -468,9 +487,13 @@ class SyncJob(Timestamped, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
-        # A broker's API credentials are shared, so one active job per broker.
+        ForeignKeyConstraint(
+            ["from_user_id", "from_broker_id"],
+            ["broker_connections.from_user_id", "broker_connections.from_broker_id"],
+        ),
         Index(
-            "uq_sync_jobs_active_broker",
+            "uq_sync_jobs_active_connection",
+            "from_user_id",
             "from_broker_id",
             unique=True,
             postgresql_where=text("status IN ('PENDING', 'RUNNING')"),

@@ -8,9 +8,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from api.deps import CurrentUser, FigiFactory, SessionFactory
 from api.schemas.sync import BackfillRequest, Job
-from config.config import API_JOBS_DEFAULT_LIMIT, API_JOBS_MAX_LIMIT
+from config.config import (
+    API_JOBS_DEFAULT_LIMIT,
+    API_JOBS_MAX_LIMIT,
+    OPENFIGI_API_KEY_KEY,
+)
 from database.models import SyncJob, SyncKind
 from integrations.base import BrokerAdapter
+from integrations.connections import (
+    CredentialsUnreadableError,
+    NotConnectedError,
+    load_credentials,
+)
 from integrations.openfigi import OpenFigiClient
 from integrations.sync import (
     ActiveJobError,
@@ -20,12 +29,7 @@ from integrations.sync import (
     refresh_range,
     run_job,
 )
-from user_config.service import (
-    ConfigMissingError,
-    ConfigUnreadableError,
-    require,
-    resolve,
-)
+from user_config.service import ConfigUnreadableError, read_config
 
 
 class SyncConflictError(Exception):
@@ -37,7 +41,8 @@ class SyncConflictError(Exception):
 _CONFLICT_CODES: dict[type[Exception], str] = {
     NoActivityError: "no_activity",
     ActiveJobError: "job_active",
-    ConfigMissingError: "config_missing",
+    NotConnectedError: "config_missing",
+    CredentialsUnreadableError: "config_unreadable",
     ConfigUnreadableError: "config_unreadable",
 }
 
@@ -125,7 +130,8 @@ def _start(
 ) -> Job:
     try:
         with session_factory.begin() as session:
-            require(resolve(session, user_id), broker.config_keys, broker.broker_id)
+            load_credentials(session, broker, user_id)
+            read_config(session, user_id, OPENFIGI_API_KEY_KEY)
 
             start, end = date_range(session)
             job = create_job(session, broker, user_id, kind, start, end)

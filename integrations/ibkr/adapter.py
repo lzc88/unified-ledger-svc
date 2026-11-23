@@ -1,7 +1,12 @@
 from collections.abc import Iterable, Mapping
 from datetime import date
 
-from config.config import IBKR_CONFIG_KEYS, IBKR_FLEX_TIMEZONE
+from config.config import (
+    IBKR_CREDENTIAL_KEYS,
+    IBKR_FLEX_QUERY_ID_CREDENTIAL,
+    IBKR_FLEX_TIMEZONE,
+    IBKR_FLEX_TOKEN_CREDENTIAL,
+)
 from integrations.base import MappingResult
 
 from .flex import fetch_documents
@@ -12,11 +17,16 @@ class IbkrAdapter:
     broker_id = "IBKR"
     broker_name = "Interactive Brokers"
     timezone = IBKR_FLEX_TIMEZONE
-    config_keys = IBKR_CONFIG_KEYS
+    credential_keys = IBKR_CREDENTIAL_KEYS
 
-    def fetch(self, start: date, end: date, config: Mapping[str, str]) -> list[bytes]:
+    def fetch(
+        self, start: date, end: date, credentials: Mapping[str, str]
+    ) -> list[bytes]:
         return fetch_documents(
-            config["IBKR_FLEX_TOKEN"], config["IBKR_FLEX_QUERY_ID"], start, end
+            credentials[IBKR_FLEX_TOKEN_CREDENTIAL],
+            credentials[IBKR_FLEX_QUERY_ID_CREDENTIAL],
+            start,
+            end,
         )
 
     def map(self, documents: Iterable[bytes]) -> MappingResult:

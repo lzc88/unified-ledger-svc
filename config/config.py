@@ -100,15 +100,31 @@ CONFIG_KEYS = {
         secret=False,
         required=False,
     ),
+    "OTHER_RELIEFS": ConfigKey(
+        group="profile",
+        label="Other tax reliefs",
+        description=(
+            "yearly reliefs beyond cpf and earned income relief, e.g. srs or parent relief. "
+            "used for the tax estimate in the forecast."
+        ),
+        secret=False,
+        required=False,
+    ),
+    "OPENFIGI_API_KEY": ConfigKey(
+        group="integrations",
+        label="OpenFIGI API key",
+        description="optional; raises the openfigi rate limit when mapping broker assets.",
+        secret=True,
+        required=False,
+    ),
 }
 BIRTH_YEAR_MIN = 1900
+OTHER_RELIEFS_MAX = 80000
 
-IBKR_FLEX_TOKEN_KEY = "IBKR_FLEX_TOKEN"
-IBKR_FLEX_QUERY_ID_KEY = "IBKR_FLEX_QUERY_ID"
 OPENFIGI_API_KEY_KEY = "OPENFIGI_API_KEY"
-IBKR_CONFIG_KEYS = (IBKR_FLEX_TOKEN_KEY, IBKR_FLEX_QUERY_ID_KEY)
-IBKR_CONNECTION_KEYS = (*IBKR_CONFIG_KEYS, OPENFIGI_API_KEY_KEY)
-INTEGRATION_KEYS = frozenset(IBKR_CONNECTION_KEYS)
+IBKR_FLEX_TOKEN_CREDENTIAL = "flex_token"
+IBKR_FLEX_QUERY_ID_CREDENTIAL = "flex_query_id"
+IBKR_CREDENTIAL_KEYS = (IBKR_FLEX_TOKEN_CREDENTIAL, IBKR_FLEX_QUERY_ID_CREDENTIAL)
 
 CONFIG_VALUE_MAX_LENGTH = 512
 CONFIG_MASK_CHAR = "•"

@@ -79,10 +79,10 @@ class BrokerAdapter(Protocol):
     broker_id: str
     broker_name: str
     timezone: ZoneInfo
-    config_keys: tuple[str, ...]
+    credential_keys: tuple[str, ...]
 
     def fetch(
-        self, start: date, end: date, config: Mapping[str, str]
+        self, start: date, end: date, credentials: Mapping[str, str]
     ) -> list[bytes]: ...
 
     def map(self, documents: Iterable[bytes]) -> MappingResult: ...

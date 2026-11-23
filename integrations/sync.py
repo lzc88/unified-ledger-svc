@@ -6,15 +6,13 @@ from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import delete, exists, func, select, update
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from config.config import SYNC_REFRESH_OVERLAP_DAYS
+from config.config import OPENFIGI_API_KEY_KEY, SYNC_REFRESH_OVERLAP_DAYS
 from database.models import (
     ACTIVE_SYNC_STATUSES,
     Account,
-    Broker,
     ExecutedCash,
     ExecutedFx,
     ExecutedFxOrder,
@@ -26,14 +24,15 @@ from database.models import (
     SyncStatus,
     TradeFee,
 )
-from user_config.service import (
-    ConfigMissingError,
-    ConfigUnreadableError,
-    require,
-    resolve,
-)
+from user_config.service import ConfigUnreadableError, read_config
 
 from .base import BrokerAdapter, FormatError, IntegrationError
+from .connections import (
+    CredentialsUnreadableError,
+    NotConnectedError,
+    get_connection,
+    load_credentials,
+)
 from .load import known_broker_assets, load
 from .openfigi import OpenFigiClient, assign_figis
 
@@ -103,11 +102,11 @@ def create_job(
     start: date,
     end: date,
 ) -> SyncJob:
-    session.execute(
-        insert(Broker)
-        .values(broker_id=broker.broker_id, broker_name=broker.broker_name)
-        .on_conflict_do_nothing()
-    )
+    if get_connection(session, broker.broker_id, user_id) is None:
+        raise NotConnectedError(
+            f"{broker.broker_id} is not connected: add it under my investments"
+        )
+
     job = SyncJob(
         from_user_id=user_id,
         from_broker_id=broker.broker_id,
@@ -122,7 +121,7 @@ def create_job(
     except IntegrityError as exc:
         if (
             getattr(exc.orig.diag, "constraint_name", None)
-            == "uq_sync_jobs_active_broker"
+            == "uq_sync_jobs_active_connection"
         ):
             raise ActiveJobError(
                 f"an {broker.broker_id} sync job is already in progress"
@@ -146,13 +145,13 @@ def run_job(
     outcome: dict[str, Any] = {"status": SyncStatus.FAILED}
     try:
         with session_factory() as session:
-            config = resolve(session, user_id)
-        require(config, broker.config_keys, broker.broker_id)
+            credentials = load_credentials(session, broker, user_id)
+            openfigi_key = read_config(session, user_id, OPENFIGI_API_KEY_KEY)
 
-        result = broker.map(broker.fetch(start, end, config))
+        result = broker.map(broker.fetch(start, end, credentials))
         with session_factory() as session:
             known = known_broker_assets(session, broker.broker_id, result.assets)
-        assign_figis(result, known, figi_factory(config.get("OPENFIGI_API_KEY")))
+        assign_figis(result, known, figi_factory(openfigi_key))
         with session_factory.begin() as session:
             inserted = load(session, broker, result, user_id)
         outcome = {
@@ -161,7 +160,8 @@ def run_job(
             "skipped": [asdict(row) for row in result.skipped],
         }
     except (
-        ConfigMissingError,
+        NotConnectedError,
+        CredentialsUnreadableError,
         ConfigUnreadableError,
         IntegrationError,
         FormatError,
