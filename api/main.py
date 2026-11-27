@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from api.deps import get_openfigi_factory, get_session_factory
 from api.router import api_router
+from api.routes.integrations.accounts import AccountConflictError
 from api.routes.integrations.sync import SyncConflictError
 from config.config import SYNC_SCHEDULER_ENABLED
 from database.db import engine
@@ -65,6 +66,14 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
 
 @app.exception_handler(SyncConflictError)
 async def _sync_conflict(request: Request, exc: SyncConflictError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": str(exc), "code": exc.code},
+    )
+
+
+@app.exception_handler(AccountConflictError)
+async def _account_conflict(request: Request, exc: AccountConflictError) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": str(exc), "code": exc.code},

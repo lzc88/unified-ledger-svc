@@ -35,6 +35,7 @@ class AccountSnapshot:
     snapshot_date: date
     holdings: tuple[Holding, ...] = ()
     cash: dict[str, Decimal] = field(default_factory=dict)
+    included: bool = True
 
 
 Key = tuple[date, str, str]
@@ -58,7 +59,7 @@ def load_snapshots(session: Session, user_id: str) -> list[AccountSnapshot]:
             CanonicalAsset,
             CanonicalAsset.trading_venue_figi == BrokerAsset.from_asset_id,
         )
-        .where(Account.from_user_id == user_id)
+        .where(Account.from_user_id == user_id, Account.included)
     ).all()
 
     cash = session.scalars(
@@ -70,11 +71,11 @@ def load_snapshots(session: Session, user_id: str) -> list[AccountSnapshot]:
                 Account.from_broker_id == CashSnapshot.from_broker_id,
             ),
         )
-        .where(Account.from_user_id == user_id)
+        .where(Account.from_user_id == user_id, Account.included)
     ).all()
 
-    days = session.scalars(
-        select(SnapshotDay)
+    days = session.execute(
+        select(SnapshotDay, Account.included)
         .join(
             Account,
             and_(
@@ -84,8 +85,9 @@ def load_snapshots(session: Session, user_id: str) -> list[AccountSnapshot]:
         )
         .where(Account.from_user_id == user_id)
     ).all()
-    synced: set[Key] = {
-        (row.snapshot_date, row.from_broker_id, row.from_account_id) for row in days
+    synced: dict[Key, bool] = {
+        (row.snapshot_date, row.from_broker_id, row.from_account_id): included
+        for row, included in days
     }
 
     holdings: dict[Key, list[Holding]] = defaultdict(list)
@@ -118,6 +120,7 @@ def load_snapshots(session: Session, user_id: str) -> list[AccountSnapshot]:
                 snapshot_date=day,
                 holdings=tuple(sorted(holdings.get(key, ()), key=lambda h: h.asset_id)),
                 cash=balances.get(key, {}),
+                included=synced.get(key, True),
             )
         )
     return snapshots

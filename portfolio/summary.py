@@ -100,7 +100,7 @@ def build_summary(
     currency: str,
     today: date,
 ) -> PortfolioSummary:
-    if not snapshots:
+    if not any(snapshot.included for snapshot in snapshots):
         raise NoSnapshotsError(f"no broker snapshots for user {user_id!r}")
 
     warnings: list[str] = []
@@ -186,7 +186,8 @@ def _latest(
     last_seen: dict[AccountKey, date] = {}
     for snapshot in ordered:
         key = (snapshot.broker_id, snapshot.account_id)
-        last_seen[key] = snapshot.snapshot_date
+        if snapshot.included:
+            last_seen[key] = snapshot.snapshot_date
         if snapshot.snapshot_date == newest[snapshot.broker_id]:
             latest[key] = snapshot
 
@@ -204,7 +205,7 @@ def _warn_stale(
     latest: dict[AccountKey, AccountSnapshot], snapshot_date: date, warnings: list[str]
 ) -> None:
     for (broker_id, account_id), snapshot in latest.items():
-        if snapshot.snapshot_date < snapshot_date:
+        if snapshot.included and snapshot.snapshot_date < snapshot_date:
             warnings.append(
                 f"{broker_id} account {account_id} was last snapshotted on "
                 f"{snapshot.snapshot_date.isoformat()}"
@@ -378,7 +379,7 @@ def _history(
     live_value: Rate,
     warnings: list[str],
 ) -> list[HistoryPoint]:
-    start = ordered[0].snapshot_date
+    start = min(s.snapshot_date for s in ordered if s.included)
     closes = _closes(
         market,
         set(priceable.values()) | set(fx_symbols.values()),
