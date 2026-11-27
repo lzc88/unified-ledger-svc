@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from datetime import date
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,8 @@ from database.models import (
 )
 
 from .base import BrokerAdapter, IntegrationError, Row, Snapshot
+
+ACCOUNT_NAME_LENGTH = Account.__table__.c.account_name.type.length
 
 
 def store_snapshot(
@@ -56,9 +58,18 @@ def store_snapshot(
         }
         for broker_asset_id, row in new_assets.items()
     ]
+    names = {
+        account_id: _account_name(snapshot.account_names.get(account_id))
+        for account_id in snapshot.accounts
+    }
     accounts = [
-        {**row, "from_broker_id": broker_id, "from_user_id": user_id}
-        for row in snapshot.accounts.values()
+        {
+            **row,
+            "from_broker_id": broker_id,
+            "from_user_id": user_id,
+            "account_name": names[account_id],
+        }
+        for account_id, row in sorted(snapshot.accounts.items())
     ]
 
     batches: list[tuple[type[Base], list[Row]]] = [
@@ -70,6 +81,7 @@ def store_snapshot(
         counts[model.__tablename__] = _insert_new(session, model, rows)
 
     _ensure_owned(session, broker_id, user_id, snapshot.accounts)
+    _rename_accounts(session, broker_id, user_id, names)
 
     user_accounts = select(Account.account_id).where(
         Account.from_user_id == user_id, Account.from_broker_id == broker_id
@@ -146,6 +158,30 @@ def _ensure_owned(
     if foreign is not None:
         raise IntegrationError(
             f"{broker_id} account {foreign} is linked to another user"
+        )
+
+
+def _account_name(name: str | None) -> str | None:
+    name = (name or "").strip()
+    return name[:ACCOUNT_NAME_LENGTH] or None
+
+
+def _rename_accounts(
+    session: Session, broker_id: str, user_id: str, names: dict[str, str | None]
+) -> None:
+    for account_id, name in sorted(names.items()):
+        if name is None:
+            continue
+
+        session.execute(
+            update(Account)
+            .where(
+                Account.account_id == account_id,
+                Account.from_broker_id == broker_id,
+                Account.from_user_id == user_id,
+                Account.account_name.is_distinct_from(name),
+            )
+            .values(account_name=name)
         )
 
 

@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     CHAR,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -261,6 +262,10 @@ class Account(Timestamped, Base):
     )
     from_user_id: Mapped[str] = mapped_column(
         String(100), ForeignKey("users.user_id"), index=True
+    )
+    account_name: Mapped[str | None] = mapped_column(String(100))
+    included: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
     )
 
     __table_args__ = (
